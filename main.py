@@ -9,10 +9,27 @@ from torch.autograd import Variable
 from torch.utils import model_zoo
 # from tensorboardX import SummaryWriter
 import torch.optim
+import torch.nn.functional as F
+import platform
 
+class SysConfig:
+    def __init__(self):
 
+        self.hostname = platform.node()
 
+        self.style_path = None
+        self.content_path = None
 
+        if self.hostname == "Laptop":
+            self.style_path = "C:/Users/Alex/Desktop/train_1"
+            self.content_path = "C:/Users/Alex/Desktop/train_1"
+
+        elif self.hostname == "YOUR_MACHINE":
+            self.style_path = "STYLE_PATH"
+            self.content_path = "CONTENT_PATH"
+
+        else:
+            raise Exception("Unknown host {}".format(self.hostname))
 
 
 class VGGencoder(models.vgg.VGG):
@@ -26,7 +43,7 @@ class VGGencoder(models.vgg.VGG):
             if layer_name == until:
                 break
 
-            print("Fixing " + layer_name)
+            # print("Fixing " + layer_name)
             for param in layer.parameters():
                 param.requires_grad = False
 
@@ -60,7 +77,7 @@ class VGGencoder(models.vgg.VGG):
                 if cur_name != "unknown":
                     cur_name = "{}{}_{}".format(prefix, counter_units, counter_layers)
 
-                print(cur_name)
+
                 self.named_layers.append(cur_name)
 
         return self.named_layers
@@ -157,14 +174,13 @@ class StatisticLoss(nn.Module):
     def __init__(self):
         super(StatisticLoss, self).__init__()
         self.normcalc = NormCalc()
-        self.lossf = torch.nn.MSELoss()
+
 
     def forward(self, output, target):
         output_avg, output_var = self.normcalc(output)
         target_avg, target_var = self.normcalc(target)
-
-        loss = self.lossf(output_avg, target_avg) + \
-               self.lossf(output_var, target_var)
+        loss = F.mse_loss(output_avg, target_avg) + \
+               F.mse_loss(output_var, target_var)
 
         return loss
 
@@ -185,7 +201,7 @@ class StyleLoss(nn.Module):
         for of, tf in zip(output_features, target_features):
             total += self.statistical_loss(of, tf)
 
-        return tf
+        return total
 
 
 
@@ -212,8 +228,13 @@ class StyleTransfer:
         iter = 0
         ver = 0 # version
 
-    def __init__(self, gpu=False):
+    def __init__(self, gpu=True):
+
+        self.sysconfig = SysConfig()
+
         self.use_gpu = torch.cuda.is_available() and gpu
+
+
 
         self.data = StyleTransfer.Data()
 
@@ -234,7 +255,7 @@ class StyleTransfer:
         self.vgg_loss = self.to_gpu(VGGloss())
         self.vgg_loss.reuse(self.encoder)
 
-        self.style_loss = StyleLoss(self.vgg_loss)
+        self.style_loss = self.to_gpu(StyleLoss(self.vgg_loss))
 
     def load_state(self, name):
         load_obj = torch.load(name)
@@ -272,9 +293,9 @@ class StyleTransfer:
 
         return x
 
-    def to_variable(self, x, volatile=False):
+    def to_variable(self, x, requires_grad=True):
         x = self.to_gpu(x)
-        x = Variable(x)
+        x = Variable(x, requires_grad=requires_grad)
 
         return x
 
@@ -292,9 +313,6 @@ class StyleTransfer:
 
                 stylized_content = self.decoder(vgg_content_with_stlye)
 
-                print(stylized_content.shape)
-                print(image_style.shape)
-
                 style_loss = self.style_loss(stylized_content, image_style)
                 # content_loss = self.content_loss(stylized_content, vgg_content_with_stlye)
                 # total_loss = style_loss + content_loss
@@ -304,7 +322,7 @@ class StyleTransfer:
                 total_loss.backward()
                 self.optimizer.step()
 
-                print("done")
+                print("done iter")
 
                 self.data.iter += 1
 
@@ -320,8 +338,8 @@ class StyleTransfer:
             transforms.ToTensor(),
                 ])
 
-        cdataset = csdataset.CSDataset([crop_size,crop_size],"C:/Users/Alex/Desktop/train_1",
-                                     "C:/Users/Alex/Desktop/train_1",
+        cdataset = csdataset.CSDataset([crop_size,crop_size], self.sysconfig.content_path,
+                                     self.sysconfig.style_path,
                                      trans, trans)
 
 
