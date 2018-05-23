@@ -8,7 +8,7 @@ from torchvision import models
 from torch.autograd import Variable
 from torch.utils import model_zoo
 # from tensorboardX import SummaryWriter
-
+import torch.optim
 
 
 
@@ -75,16 +75,11 @@ class VGGloss(models.vgg.VGG):
     def __init__(self):
         super(VGGloss, self).__init__(models.vgg.make_layers(models.vgg.cfg['E']))
         self.layer_names = []
-        self.return_names = []
-
-    def set_outputs(self, return_names):
-        self.return_names = return_names
-
 
     def reuse(self, encoder):
         self.layer_names = encoder.get_name_layers()
 
-        my_params = {name: param for name, param in self.parameters()}
+        my_params = {name: param for name, param in self.named_parameters()}
 
         for name, param in encoder.named_parameters():
             my_params[name].data = param.data
@@ -93,17 +88,20 @@ class VGGloss(models.vgg.VGG):
 
 
     def forward(self, x):
+        return self.features(x)
 
-        nret = len(self.return_names)
+    def run(self, x, return_names):
+
+        nret = len(return_names)
         ret = [None] * nret
 
 
-        for layer_name, layer in zip(self.networks.children()):
+        for layer_name, layer in zip(self.layer_names, self.features.children()):
 
 
             x = layer(x)
 
-            for idx, lname in enumerate(self.return_names):
+            for idx, lname in enumerate(return_names):
                 if lname == layer_name:
                     ret[idx] = x
                     nret -= 1
@@ -115,33 +113,38 @@ class VGGloss(models.vgg.VGG):
 class Decoder(nn.Module):
     def __init__(self):
         super(Decoder, self).__init__()
+        self.conv1 = nn.Conv2d(512,3,3,padding=1)
+        self.upsample = nn.Upsample(scale_factor=2**5)
 
     def forward(self, x):
+        print("Fixme")
+
+        x = self.conv1(x)
+        x = self.upsample(x)
+
         return x
 
 
-def temp():
-    vgg19 = models.vgg19(True)
-
 class NormCalc(nn.Module):
     def __init__(self):
-        pass
+        super(NormCalc, self).__init__()
 
     def forward(self, x):
         size = x.size()
-        x_view = x.view(size[0], )
-        assert False #x_view fix
-        avg = x_view.mean(2, keep_dim=True)
+        x_view = x.view(size[0], size[1], -1)
+
+        avg = x_view.mean(2, keepdim=True)
 
         var = x_view - avg
         var = var * var
-        var = x_view.mean(2, keep_dim=True)
+        var = var.mean(2, keepdim=True)
 
-        return avg, var
+        return avg.unsqueeze(-1), var.unsqueeze(-1)
 
 
 class Normalizer(nn.Module):
     def __init__(self):
+        super(Normalizer, self).__init__()
         self.normcalc = NormCalc()
 
     def forward(self, x):
@@ -150,8 +153,45 @@ class Normalizer(nn.Module):
         return x
 
 
+class StatisticLoss(nn.Module):
+    def __init__(self):
+        super(StatisticLoss, self).__init__()
+        self.normcalc = NormCalc()
+        self.lossf = torch.nn.MSELoss()
+
+    def forward(self, output, target):
+        output_avg, output_var = self.normcalc(output)
+        target_avg, target_var = self.normcalc(target)
+
+        loss = self.lossf(output_avg, target_avg) + \
+               self.lossf(output_var, target_var)
+
+        return loss
+
+
+class StyleLoss(nn.Module):
+    def __init__(self, vgg_loss):
+        super(StyleLoss, self).__init__()
+        self.vgg_loss = vgg_loss
+        self.layers = ["relu1_1", "relu2_1", "relu3_1", "relu4_1"]
+        self.statistical_loss = StatisticLoss()
+
+    def forward(self, output, target):
+        output_features = self.vgg_loss.run(output, self.layers)
+        target_features = self.vgg_loss.run(target, self.layers)
+
+        total = 0
+
+        for of, tf in zip(output_features, target_features):
+            total += self.statistical_loss(of, tf)
+
+        return tf
+
+
+
 class AdaIN(nn.Module):
     def __init__(self):
+        super(AdaIN, self).__init__()
         self.normcalc = NormCalc()
         self.normalizer = Normalizer()
 
@@ -183,16 +223,18 @@ class StyleTransfer:
         self.decoder = self.to_gpu(Decoder())
 
         self.encoder.fix_first_layers("relu4_1")
-        self.encoder.get_name_layers()
 
 
         self.adain = self.to_gpu(AdaIN())
 
-        self.optimizer = None
+        params_list = [param for param in self.encoder.parameters() if param.requires_grad] + list(self.decoder.parameters())
+        self.optimizer = torch.optim.Adam(params_list, lr=0.01)
         self.optimizer_type = "Adam"
 
         self.vgg_loss = self.to_gpu(VGGloss())
         self.vgg_loss.reuse(self.encoder)
+
+        self.style_loss = StyleLoss(self.vgg_loss)
 
     def load_state(self, name):
         load_obj = torch.load(name)
@@ -248,12 +290,19 @@ class StyleTransfer:
 
                 vgg_content_with_stlye = self.adain(vgg_content, vgg_style)
 
-                stylized_content = self.decode(vgg_content_with_stlye)
+                stylized_content = self.decoder(vgg_content_with_stlye)
+
+                print(stylized_content.shape)
+                print(image_style.shape)
 
                 style_loss = self.style_loss(stylized_content, image_style)
-                content_loss = self.content_loss(stylized_content, vgg_content_with_stlye)
+                # content_loss = self.content_loss(stylized_content, vgg_content_with_stlye)
+                # total_loss = style_loss + content_loss
+                total_loss = style_loss
 
-                total_loss = style_loss + content_loss
+                self.optimizer.zero_grad()
+                total_loss.backward()
+                self.optimizer.step()
 
                 print("done")
 
