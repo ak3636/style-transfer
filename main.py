@@ -52,8 +52,8 @@ class SysConfig:
             self.content_path = "C:/Users/Alex/Desktop/train_1"
 
         elif self.hostname == "LAPTOP-IVJKIKR4":
-            self.style_path = "STYLE_PATH"
-            self.content_path = "CONTENT_PATH"
+            self.style_path = "C:/Users/kroth/Downloads/val2017/"
+            self.content_path = "C:/Users/kroth/Downloads/val2017/"
 
         elif self.hostname == "alexk-pc":
             self.style_path = "/mnt/data/alexk/style-transfer/coco/val2017/"
