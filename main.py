@@ -133,13 +133,17 @@ class Decoder(nn.Module):
         # pseudo version
 #        self.conv1 = nn.Conv2d(512,3,3,padding=1)
 #        self.upsample = nn.Upsample(scale_factor=2**5)
-        
+        self.conv1uniform = nn.Conv2d(512, 512, 3, padding=1)
+        self.conv2uniform = nn.Conv2d(256, 256, 3, padding=1)
+        self.conv3uniform = nn.Conv2d(128, 128, 3, padding=1)
+        self.conv4uniform = nn.Conv2d(64, 64, 3, padding=1)
+        self.conv5uniform = nn.Conv2d(3, 3, 3, padding=1)
+
         self.conv1 = nn.Conv2d(512, 256, 3, padding=1)
         self.conv2 = nn.Conv2d(256, 128, 3, padding=1)
         self.conv3 = nn.Conv2d(128, 64, 3, padding=1)
-        self.conv4 = nn.Conv2d(64, 32, 3, padding=1)
-        self.conv5 = nn.Conv2d(32, 16, 3, padding=1)
-        self.conv6 = nn.Conv2d(16, 3, 3, padding=1)
+        self.conv4 = nn.Conv2d(64, 3, 3, padding=1)
+        self.conv5 = nn.Conv2d(16, 3, 3, padding=1)
 
         self.upsample = nn.Upsample(scale_factor=2)
 
@@ -148,12 +152,26 @@ class Decoder(nn.Module):
 #        x = self.conv1(x)
 #        x = self.upsample(x)
         
-        x = F.relu(self.conv1(self.upsample(x)))
-        x = F.relu(self.conv2(self.upsample(x)))
-        x = F.relu(self.conv3(self.upsample(x)))
-        x = F.relu(self.conv4(self.upsample(x)))
-        x = F.relu(self.conv5(self.upsample(x)))
-        x = self.conv6(x)
+        # layer 1 maintain the same number of channels (512)
+        x = self.upsample(x)
+        for i in range(4):
+            x = F.relu(self.conv1uniform(x))
+        # layer 2 decrease the number of channels from 521 to 256
+        x = self.upsample
+        for i in range(3):
+            x = F.relu(self.conv1uniform(x))
+        x = F.relu(self.conv1(x))
+        # layer 3 decrease the number of channels from 256 to 128
+        x = self.upsample(x)
+        for i in range(3):
+            x = F.relu(self.conv2uniform(x))
+        x = F.relu(self.conv2(x))
+        # layer 4 decrease number of channels from 128 to 64
+        x = F.relu(self.conv3(F.relu(self.conv3uniform(self.upsample(x)))))
+        # layer 5 decrease number of channels from 64 to 3
+        x = F.relu(self.conv4(F.relu(self.conv4uniform(self.upsample(x)))))
+        # last convolution to smooth 
+        x = self.conv5uniform(x)
         return x
 
 
