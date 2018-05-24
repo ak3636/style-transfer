@@ -137,12 +137,11 @@ class Decoder(nn.Module):
         self.conv2uniform = nn.Conv2d(256, 256, 3, padding=1)
         self.conv3uniform = nn.Conv2d(128, 128, 3, padding=1)
         self.conv4uniform = nn.Conv2d(64, 64, 3, padding=1)
-        self.conv5uniform = nn.Conv2d(3, 3, 3, padding=1)
 
         self.conv1 = nn.Conv2d(512, 256, 3, padding=1)
         self.conv2 = nn.Conv2d(256, 128, 3, padding=1)
         self.conv3 = nn.Conv2d(128, 64, 3, padding=1)
-        self.conv4 = nn.Conv2d(64, 3, 3, padding=1)
+        self.conv4 = nn.Conv2d(64, 16, 3, padding=1)
         self.conv5 = nn.Conv2d(16, 3, 3, padding=1)
 
         self.upsample = nn.Upsample(scale_factor=2)
@@ -168,10 +167,10 @@ class Decoder(nn.Module):
         x = F.relu(self.conv2(x))
         # layer 4 decrease number of channels from 128 to 64
         x = F.relu(self.conv3(F.relu(self.conv3uniform(self.upsample(x)))))
-        # layer 5 decrease number of channels from 64 to 3
+        # layer 5 decrease number of channels from 64 to 16
         x = F.relu(self.conv4(F.relu(self.conv4uniform(self.upsample(x)))))
-        # last convolution to smooth 
-        x = self.conv5uniform(x)
+        # last convolution to smooth and decrease channels from 16 to 3
+        x = self.conv5(x)
         return x
 
 
