@@ -15,6 +15,8 @@ import torch.nn.functional as F
 import platform
 import argparse
 
+import time
+
 class Writer:
     def __init__(self, data):
         self.writer = None
@@ -267,6 +269,17 @@ class StyleLoss(nn.Module):
 
         return total
 
+class ContentLoss(nn.Module):
+    def __init__(self, vgg_loss):
+        super(ContentLoss, self).__init__()
+        self.vgg_loss = vgg_loss
+
+
+    def forward(self, output, target_vgg):
+        output_vgg = self.vgg_loss.forward(output)
+
+        return F.mse_loss(output_vgg, target_vgg)
+
 
 
 class AdaIN(nn.Module):
@@ -285,7 +298,17 @@ class AdaIN(nn.Module):
 
         return x
 
+def reverse_normalization(mean, std):
+    mean = [-a*b for a,b in zip(mean, std)]
+    std = [1/a for a in std]
+
+    return  transforms.Normalize(mean=mean,  std=std)
+
+
 class StyleTransfer:
+    vgg_mean = [0.485, 0.456, 0.406]
+    vgg_std = [0.229, 0.224, 0.225]
+
 
     class Data:
         epoch = 0
@@ -328,8 +351,11 @@ class StyleTransfer:
         self.vgg_loss.reuse(self.encoder)
 
         self.style_loss = self.to_gpu(StyleLoss(self.vgg_loss))
+        self.content_loss = self.to_gpu(ContentLoss(self.vgg_loss))
 
         self.writer = Writer(self.data)
+
+        self.to_screen_space = reverse_normalization(self.vgg_mean, self.vgg_std)
 
     def load_state(self, name):
         load_obj = torch.load(name)
@@ -375,6 +401,10 @@ class StyleTransfer:
 
     def train(self):
 
+        print("[")
+
+        epoch_start_time = time.time()
+
         while self.data.epoch < self.max_epoch:
             for idx, (image_content, image_style) in enumerate(self.dataloader):
                 image_content = self.to_variable(image_content)
@@ -388,29 +418,33 @@ class StyleTransfer:
                 stylized_content = self.decoder(vgg_content_with_stlye)
 
                 style_loss = self.style_loss(stylized_content, image_style)
-                # content_loss = self.content_loss(stylized_content, vgg_content_with_stlye)
-                # total_loss = style_loss + content_loss
-                total_loss = style_loss
+                content_loss = self.content_loss(stylized_content, vgg_content_with_stlye)
+                total_loss = style_loss + content_loss
 
                 if self.data.iter % self.runconfig.save_loss_every == 0:
                     self.writer.add_scalar('style_loss', style_loss)
+                    self.writer.add_scalar('content_loss', content_loss)
                     self.writer.add_scalar('total_loss', total_loss)
 
                 if self.data.iter % self.runconfig.save_image_every == 0 and False:
-                    self.writer.add_image('image', torchvision.utils.make_grid(image_content.data))
-
+                    self.writer.add_image('image', torchvision.utils.make_grid(self.to_screen_space(image_content.data)))
 
 
                 self.optimizer.zero_grad()
                 total_loss.backward()
                 self.optimizer.step()
 
-                print("done iter")
+                if self.data.iter % self.runconfig.save_model_every == 0:
+                    self.save_state(self.args.model_out_name)
+                    print("|")
 
-
-
+                print("=")
 
                 self.data.iter += 1
+
+            print("]")
+
+            print("Epoch {} is complete. Time: {} seconds".format(self.data.epoch,  time.time() - epoch_start_time))
 
             self.data.epoch +=1
 
@@ -422,6 +456,8 @@ class StyleTransfer:
             transforms.Resize(crop_size),
             transforms.RandomCrop(256),
             transforms.ToTensor(),
+            transforms.Normalize(mean=self.vgg_mean,
+                                 std=self.vgg_std)
                 ])
 
         cdataset = csdataset.CSDataset([crop_size,crop_size], self.sysconfig.content_path,
@@ -452,12 +488,14 @@ def main():
 
     args = parser.parse_args()
 
-
     argp.model_out_name = args.modelout[0]
     argp.model_in_name = args.modelin[0]
 
-
     st = StyleTransfer(gpu=True, args=argp)
+
+    if argp.model_in_name is not None:
+        st.load_state(argp.model_in_name)
+
     st.create_train_dataset()
     st.train()
 
