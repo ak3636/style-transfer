@@ -24,7 +24,7 @@ class SysConfig:
             self.style_path = "C:/Users/Alex/Desktop/train_1"
             self.content_path = "C:/Users/Alex/Desktop/train_1"
 
-        elif self.hostname == "YOUR_MACHINE":
+        elif self.hostname == "LAPTOP-IVJKIKR4":
             self.style_path = "STYLE_PATH"
             self.content_path = "CONTENT_PATH"
 
@@ -49,7 +49,7 @@ class VGGencoder(models.vgg.VGG):
 
         else:
             if until is not None:
-                raise Exception("Ffixed all layers")
+                raise Exception("Fixed all layers")
 
     def get_name_layers(self):
         if self.named_layers is None:
@@ -130,15 +130,30 @@ class VGGloss(models.vgg.VGG):
 class Decoder(nn.Module):
     def __init__(self):
         super(Decoder, self).__init__()
-        self.conv1 = nn.Conv2d(512,3,3,padding=1)
-        self.upsample = nn.Upsample(scale_factor=2**5)
+        # pseudo version
+#        self.conv1 = nn.Conv2d(512,3,3,padding=1)
+#        self.upsample = nn.Upsample(scale_factor=2**5)
+        
+        self.conv1 = nn.Conv2d(512, 256, 3, padding=1)
+        self.conv2 = nn.Conv2d(256, 128, 3, padding=1)
+        self.conv3 = nn.Conv2d(128, 64, 3, padding=1)
+        self.conv4 = nn.Conv2d(64, 32, 3, padding=1)
+        self.conv5 = nn.Conv2d(32, 16, 3, padding=1)
+        self.conv6 = nn.Conv2d(16, 3, 3, padding=1)
+
+        self.upsample = nn.Upsample(scale_factor=2)
 
     def forward(self, x):
-        print("Fixme")
-
-        x = self.conv1(x)
-        x = self.upsample(x)
-
+        # pseudo version
+#        x = self.conv1(x)
+#        x = self.upsample(x)
+        
+        x = F.relu(self.conv1(self.upsample(x)))
+        x = F.relu(self.conv2(self.upsample(x)))
+        x = F.relu(self.conv3(self.upsample(x)))
+        x = F.relu(self.conv4(self.upsample(x)))
+        x = F.relu(self.conv5(self.upsample(x)))
+        x = self.conv6(x)
         return x
 
 
