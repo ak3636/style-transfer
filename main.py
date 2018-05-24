@@ -5,12 +5,39 @@ import csdataset
 from torchvision import transforms
 
 from torchvision import models
+import torchvision
 from torch.autograd import Variable
 from torch.utils import model_zoo
-# from tensorboardX import SummaryWriter
+
+from tensorboardX import SummaryWriter
 import torch.optim
 import torch.nn.functional as F
 import platform
+import argparse
+
+class Writer:
+    def __init__(self, data):
+        self.writer = None
+        self.data = data
+
+    def init(self):
+        if self.writer is None:
+            self.writer = SummaryWriter()
+
+        return self.writer
+
+
+
+    def add_scalar(self, *args, **kwargs):
+        self.init()
+        return self.writer.add_scalar(*args, global_step=self.data.iter, **kwargs)
+
+    def add_image(self, *args, **kwargs):
+        self.init()
+        return self.writer.add_image(*args, global_step=self.data.iter, **kwargs)
+
+
+
 
 class SysConfig:
     def __init__(self):
@@ -28,15 +55,20 @@ class SysConfig:
             self.style_path = "STYLE_PATH"
             self.content_path = "CONTENT_PATH"
 
+        elif self.hostname == "alexk-pc":
+            self.style_path = "/mnt/data/alexk/style-transfer/coco/val2017/"
+            self.content_path = "/mnt/data/alexk/style-transfer/coco/val2017/"
         else:
             raise Exception("Unknown host {}".format(self.hostname))
 
 
 class VGGencoder(models.vgg.VGG):
-    def __init__(self):
+    def __init__(self, fix_until):
         super(VGGencoder, self).__init__(models.vgg.make_layers(models.vgg.cfg['E']))
         self.load_state_dict(model_zoo.load_url(models.vgg.model_urls['vgg19']))
         self.named_layers = None
+
+        self.fix_first_layers(fix_until)
 
     def fix_first_layers(self, until):
         for layer_name, layer in zip(self.get_name_layers(), self.features.children()):
@@ -228,9 +260,17 @@ class StyleTransfer:
         iter = 0
         ver = 0 # version
 
-    def __init__(self, gpu=True):
+    class RunConfig:
+        save_loss_every = 10
+        save_image_every = 100
+        save_model_every = 1000
+
+    def __init__(self, args, gpu=True):
+
+        self.args = args
 
         self.sysconfig = SysConfig()
+        self.runconfig = StyleTransfer.RunConfig()
 
         self.use_gpu = torch.cuda.is_available() and gpu
 
@@ -240,10 +280,10 @@ class StyleTransfer:
 
         self.max_epoch = 1000000
 
-        self.encoder = self.to_gpu(VGGencoder())
+        self.encoder = self.to_gpu(VGGencoder("relu4_1"))
         self.decoder = self.to_gpu(Decoder())
 
-        self.encoder.fix_first_layers("relu4_1")
+
 
 
         self.adain = self.to_gpu(AdaIN())
@@ -256,6 +296,8 @@ class StyleTransfer:
         self.vgg_loss.reuse(self.encoder)
 
         self.style_loss = self.to_gpu(StyleLoss(self.vgg_loss))
+
+        self.writer = Writer(self.data)
 
     def load_state(self, name):
         load_obj = torch.load(name)
@@ -288,8 +330,8 @@ class StyleTransfer:
         if self.use_gpu:
             x = x.cuda()
 
-            if isinstance(x, nn.Module):
-                x = nn.DataParallel(x)
+            # if isinstance(x, nn.Module):
+            #     x = nn.DataParallel(x)
 
         return x
 
@@ -318,11 +360,23 @@ class StyleTransfer:
                 # total_loss = style_loss + content_loss
                 total_loss = style_loss
 
+                if self.data.iter % self.runconfig.save_loss_every == 0:
+                    self.writer.add_scalar('style_loss', style_loss)
+                    self.writer.add_scalar('total_loss', total_loss)
+
+                if self.data.iter % self.runconfig.save_image_every == 0 and False:
+                    self.writer.add_image('image', torchvision.utils.make_grid(image_content.data))
+
+
+
                 self.optimizer.zero_grad()
                 total_loss.backward()
                 self.optimizer.step()
 
                 print("done iter")
+
+
+
 
                 self.data.iter += 1
 
@@ -347,8 +401,31 @@ class StyleTransfer:
                                 shuffle=True, num_workers=0)
 
 
+class Args:
+    model_out_name = None
+    model_in_name = None
+
+
 def main():
-    st = StyleTransfer(gpu=True)
+
+    argp = Args
+    parser = argparse.ArgumentParser(description='Style transfer.')
+    parser.add_argument('--modelout', type=str, nargs=1,
+                        help='File name for model output file',
+                        default=["model.pth"])
+
+    parser.add_argument('--modelin', type=str, nargs=1,
+                        help='File name for model input file',
+                        default=[None])
+
+    args = parser.parse_args()
+
+
+    argp.model_out_name = args.modelout[0]
+    argp.model_in_name = args.modelin[0]
+
+
+    st = StyleTransfer(gpu=True, args=argp)
     st.create_train_dataset()
     st.train()
 
