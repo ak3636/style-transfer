@@ -10,7 +10,8 @@ import os
 from PIL import Image
 import torch.utils.data
 import numpy as np
-
+from PIL import ImageFile
+ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 class CSDataset(torch.utils.data.Dataset):
 
@@ -19,6 +20,7 @@ class CSDataset(torch.utils.data.Dataset):
 
             self.count = count
             self.images = self.get_file_list(path)
+            # self.images = self.images[:6]
             self.image_valid = set(self.images)
             self.replace = replace
             self.size = size
@@ -38,7 +40,7 @@ class CSDataset(torch.utils.data.Dataset):
                             return ret_list
 
 
-            return ret_list
+            return sorted(ret_list)
 
         def __len__(self):
             return len(self.images)

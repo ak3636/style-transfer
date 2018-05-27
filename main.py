@@ -1,4 +1,6 @@
 #!/usr/bin/env python
+from __future__ import print_function
+
 import torch
 from torch import nn
 import csdataset
@@ -14,6 +16,9 @@ import torch.optim
 import torch.nn.functional as F
 import platform
 import argparse
+
+
+
 
 import time
 
@@ -32,11 +37,11 @@ class Writer:
 
     def add_scalar(self, *args, **kwargs):
         self.init()
-        return self.writer.add_scalar(*args, global_step=self.data.iter, **kwargs)
+        return self.writer.add_scalar(*args, global_step=self.data.iter+1, **kwargs)
 
     def add_image(self, *args, **kwargs):
         self.init()
-        return self.writer.add_image(*args, global_step=self.data.iter, **kwargs)
+        return self.writer.add_image(*args, global_step=self.data.iter+1, **kwargs)
 
 
 
@@ -58,8 +63,8 @@ class SysConfig:
             self.content_path = "C:/Users/kroth/Downloads/val2017/"
 
         elif self.hostname == "alexk-pc":
-            self.style_path = "/mnt/data/alexk/style-transfer/coco/val2017/"
-            self.content_path = "/mnt/data/alexk/style-transfer/coco/val2017/"
+            self.style_path = "/mnt/ssd_data2/alexk/style-transfer/datasets/wikiart/train_1/"
+            self.content_path = "/mnt/ssd_data2/alexk/style-transfer/datasets/coco/train2014/"
         else:
             raise Exception("Unknown host {}".format(self.hostname))
 
@@ -73,16 +78,25 @@ class VGGencoder(models.vgg.VGG):
         self.fix_first_layers(fix_until)
 
     def fix_first_layers(self, until):
+        mode = 0
+
         for layer_name, layer in zip(self.get_name_layers(), self.features.children()):
             if layer_name == until:
-                break
+                mode = 1
 
             # print("Fixing " + layer_name)
-            for param in layer.parameters():
-                param.requires_grad = False
 
-        else:
-            if until is not None:
+            if mode == 0:
+                for param in layer.parameters():
+                    param.requires_grad = False
+                    pass
+
+            elif mode == 1:
+                pass
+                # for param in layer.parameters():
+                #     param.data.normal_(0.0, 1.0)
+
+        if mode == 0 and until is not None:
                 raise Exception("Fixed all layers")
 
     def get_name_layers(self):
@@ -117,7 +131,13 @@ class VGGencoder(models.vgg.VGG):
         return self.named_layers
 
     def forward(self, x):
-        x = self.features(x)
+        for layer_name, layer in zip(self.get_name_layers(), self.features.children()):
+
+            x = layer(x)
+            if layer_name == "relu4_1":
+                break
+        # x =self.features(x)
+
         return x
 
 
@@ -127,6 +147,9 @@ class VGGloss(models.vgg.VGG):
         super(VGGloss, self).__init__(models.vgg.make_layers(models.vgg.cfg['E']))
         self.layer_names = []
 
+        for param in self.parameters():
+            param.requires_grad = False
+
     def reuse(self, encoder):
         self.layer_names = encoder.get_name_layers()
 
@@ -134,12 +157,21 @@ class VGGloss(models.vgg.VGG):
 
         for name, param in encoder.named_parameters():
             my_params[name].data = param.data
-            my_params[name].requires_grad = False
+
 
 
 
     def forward(self, x):
-        return self.features(x)
+        #
+        for layer_name, layer in zip(self.layer_names, self.features.children()):
+            # print(layer_name)
+            x = layer(x)
+            if layer_name == "relu4_1":
+                break
+
+        # x = self.features(x)
+
+        return x
 
     def run(self, x, return_names):
 
@@ -162,21 +194,47 @@ class VGGloss(models.vgg.VGG):
 
         return ret
 class Decoder(nn.Module):
+
+    def get_conv(self, lin, lout, activation=True):
+        f = [torch.nn.ReflectionPad2d(1),
+            nn.Conv2d(lin, lout, 3)]
+
+        if activation:
+            f = f + [nn.ReLU()]
+
+
+        return nn.Sequential(*f)
+
     def __init__(self):
         super(Decoder, self).__init__()
         # pseudo version
 #        self.conv1 = nn.Conv2d(512,3,3,padding=1)
 #        self.upsample = nn.Upsample(scale_factor=2**5)
-        self.conv1uniform = nn.Conv2d(512, 512, 3, padding=1)
-        self.conv2uniform = nn.Conv2d(256, 256, 3, padding=1)
-        self.conv3uniform = nn.Conv2d(128, 128, 3, padding=1)
-        self.conv4uniform = nn.Conv2d(64, 64, 3, padding=1)
 
-        self.conv1 = nn.Conv2d(512, 256, 3, padding=1)
-        self.conv2 = nn.Conv2d(256, 128, 3, padding=1)
-        self.conv3 = nn.Conv2d(128, 64, 3, padding=1)
-        self.conv4 = nn.Conv2d(64, 16, 3, padding=1)
-        self.conv5 = nn.Conv2d(16, 3, 3, padding=1)
+        self.conv1uniform = nn.Sequential(
+            *[self.get_conv(512, 512) for _ in range(3)]
+        )
+
+        self.conv2uniform = nn.Sequential(
+           * ([self.get_conv(512, 512) for _ in range(0)] +
+           [self.get_conv(512, 256)])
+        )
+
+        self.conv3uniform = nn.Sequential(
+           *([self.get_conv(256, 256) for _ in range(3)] +
+           [self.get_conv(256, 128)])
+        )
+
+        self.conv4uniform =self.get_conv(128, 128)
+
+
+        self.conv5uniform = self.get_conv(64, 64)
+
+
+
+        self.conv3 =self.get_conv(128, 64)
+        self.conv4 =self.get_conv(64, 3,activation=False)
+        #self.conv5 = self.get_conv(16, 3)
 
         self.upsample = nn.Upsample(scale_factor=2)
 
@@ -185,26 +243,27 @@ class Decoder(nn.Module):
 #        x = self.conv1(x)
 #        x = self.upsample(x)
         
-        # layer 1 maintain the same number of channels (512)
-        x = self.upsample(x)
-        for i in range(4):
-            x = F.relu(self.conv1uniform(x))
+        # # layer 1 maintain the same number of channels (512)
+        # x = self.upsample(x)
+        #
+        # x = self.conv1uniform(x)
+
         # layer 2 decrease the number of channels from 521 to 256
-        x = self.upsample
-        for i in range(3):
-            x = F.relu(self.conv1uniform(x))
-        x = F.relu(self.conv1(x))
+        #x = self.upsample(x)
+
+        x = self.conv2uniform(x)
+
         # layer 3 decrease the number of channels from 256 to 128
         x = self.upsample(x)
-        for i in range(3):
-            x = F.relu(self.conv2uniform(x))
-        x = F.relu(self.conv2(x))
+
+
+        x = self.conv3uniform(x)
         # layer 4 decrease number of channels from 128 to 64
-        x = F.relu(self.conv3(F.relu(self.conv3uniform(self.upsample(x)))))
+        x = self.conv3(self.conv4uniform(self.upsample(x)))
         # layer 5 decrease number of channels from 64 to 16
-        x = F.relu(self.conv4(F.relu(self.conv4uniform(self.upsample(x)))))
+        x =self.conv4(self.conv5uniform(self.upsample(x)))
         # last convolution to smooth and decrease channels from 16 to 3
-        x = self.conv5(x)
+        #x = self.conv5(x)
         return x
 
 
@@ -218,11 +277,11 @@ class NormCalc(nn.Module):
 
         avg = x_view.mean(2, keepdim=True)
 
-        var = x_view - avg
-        var = var * var
-        var = var.mean(2, keepdim=True)
+        std = x_view.std(2, keepdim=True)
 
-        return avg.unsqueeze(-1), var.unsqueeze(-1)
+        std = std + 1e-5
+
+        return avg.unsqueeze(-1), std.unsqueeze(-1)
 
 
 class Normalizer(nn.Module):
@@ -231,8 +290,8 @@ class Normalizer(nn.Module):
         self.normcalc = NormCalc()
 
     def forward(self, x):
-        avg, var = self.normcalc(x)
-        x = (x - avg) / var
+        avg, std = self.normcalc(x)
+        x = (x - avg) / std
         return x
 
 
@@ -243,10 +302,10 @@ class StatisticLoss(nn.Module):
 
 
     def forward(self, output, target):
-        output_avg, output_var = self.normcalc(output)
-        target_avg, target_var = self.normcalc(target)
-        loss = F.mse_loss(output_avg, target_avg) + \
-               F.mse_loss(output_var, target_var)
+        output_avg, output_std = self.normcalc(output)
+        target_avg, target_std = self.normcalc(target)
+        loss = F.mse_loss(output_avg, target_avg, size_average=False) + \
+               F.mse_loss(output_std, target_std, size_average=False)
 
         return loss
 
@@ -291,33 +350,44 @@ class AdaIN(nn.Module):
     def forward(self, content, style):
         # todo support multiple styles and mixing
 
-        avg, var = self.normcalc(style)
+        avg, std = self.normcalc(style)
         content = self.normalizer(content)
 
-        x = (content+avg) * var
+        x = (content* std) +avg
 
         return x
 
-def reverse_normalization(mean, std):
-    mean = [-a*b for a,b in zip(mean, std)]
-    std = [1/a for a in std]
+class ReverseNormalization:
 
-    return  transforms.Normalize(mean=mean,  std=std)
+    def __init__(self, mean, std):
+        self.mean = mean
+        self.std = std
 
+    def __call__(self,  x):
+        ret = []
+
+        num_layers = int(x.shape[1])
+
+        for idx in range(num_layers):
+            ret.append(x[:,idx, :,:]*self.std[idx] + self.mean[idx])
+
+        return torch.stack(ret, 1)
+
+class Data:
+    epoch = 0
+    iter = 0
+    ver = 0 # version
 
 class StyleTransfer:
     vgg_mean = [0.485, 0.456, 0.406]
     vgg_std = [0.229, 0.224, 0.225]
 
 
-    class Data:
-        epoch = 0
-        iter = 0
-        ver = 0 # version
+
 
     class RunConfig:
         save_loss_every = 10
-        save_image_every = 100
+        save_image_every = 10000
         save_model_every = 1000
 
     def __init__(self, args, gpu=True):
@@ -331,20 +401,20 @@ class StyleTransfer:
 
 
 
-        self.data = StyleTransfer.Data()
+        self.data = Data()
 
         self.max_epoch = 1000000
 
         self.encoder = self.to_gpu(VGGencoder("relu4_1"))
         self.decoder = self.to_gpu(Decoder())
 
-
-
+        self.batch_size = 4
 
         self.adain = self.to_gpu(AdaIN())
 
         params_list = [param for param in self.encoder.parameters() if param.requires_grad] + list(self.decoder.parameters())
-        self.optimizer = torch.optim.Adam(params_list, lr=0.01)
+        params_list = self.decoder.parameters()
+        self.optimizer = torch.optim.Adam(params_list, lr=0.0001)
         self.optimizer_type = "Adam"
 
         self.vgg_loss = self.to_gpu(VGGloss())
@@ -355,12 +425,14 @@ class StyleTransfer:
 
         self.writer = Writer(self.data)
 
-        self.to_screen_space = reverse_normalization(self.vgg_mean, self.vgg_std)
+        self.to_screen_space = ReverseNormalization(self.vgg_mean, self.vgg_std)
 
     def load_state(self, name):
         load_obj = torch.load(name)
 
         self.data = load_obj["Data"]
+        self.writer.data = self.data
+
         networks = load_obj["Networks"]
 
         self.encoder.load_state_dict(networks['Encoder'])
@@ -387,7 +459,7 @@ class StyleTransfer:
     def to_gpu(self,x):
         if self.use_gpu:
             x = x.cuda()
-
+            #
             # if isinstance(x, nn.Module):
             #     x = nn.DataParallel(x)
 
@@ -401,12 +473,18 @@ class StyleTransfer:
 
     def train(self):
 
-        print("[")
-
-        epoch_start_time = time.time()
 
         while self.data.epoch < self.max_epoch:
+
+            print("[", end='')
+
+            epoch_start_time = time.time()
+
             for idx, (image_content, image_style) in enumerate(self.dataloader):
+                # print(image_content.type())
+                # print(image_style.type())
+
+
                 image_content = self.to_variable(image_content)
                 image_style = self.to_variable(image_style)
 
@@ -414,31 +492,45 @@ class StyleTransfer:
                 vgg_style = self.encoder(image_style)
 
                 vgg_content_with_stlye = self.adain(vgg_content, vgg_style)
+                # vgg_content_with_stlye = vgg_content
 
                 stylized_content = self.decoder(vgg_content_with_stlye)
 
-                style_loss = self.style_loss(stylized_content, image_style)
+                style_loss = self.style_loss(stylized_content, image_style) * .01 / self.batch_size
                 content_loss = self.content_loss(stylized_content, vgg_content_with_stlye)
                 total_loss = style_loss + content_loss
 
-                if self.data.iter % self.runconfig.save_loss_every == 0:
+#                total_loss = F.mse_loss(stylized_content,image_content )
+
+                if (self.data.iter + 1) % self.runconfig.save_loss_every == 0:
                     self.writer.add_scalar('style_loss', style_loss)
                     self.writer.add_scalar('content_loss', content_loss)
                     self.writer.add_scalar('total_loss', total_loss)
 
-                if self.data.iter % self.runconfig.save_image_every == 0 and False:
-                    self.writer.add_image('image', torchvision.utils.make_grid(self.to_screen_space(image_content.data)))
+                if (self.data.iter + 1) % self.runconfig.save_image_every == 0:
+                    self.writer.add_image('image', torchvision.utils.make_grid(torch.cat(
+                        [
+                            self.to_screen_space(image_content.data),
+                            self.to_screen_space(image_style.data),
+                            self.to_screen_space(stylized_content.data).clamp(0,1),
+                        ], 0
+                    ), nrow=self.batch_size, padding=0))
 
 
                 self.optimizer.zero_grad()
+                self.encoder.zero_grad()
+                self.content_loss.zero_grad()
+                self.style_loss.zero_grad()
+                self.vgg_loss.zero_grad()
+
                 total_loss.backward()
                 self.optimizer.step()
 
-                if self.data.iter % self.runconfig.save_model_every == 0:
+                if (self.data.iter + 1) % self.runconfig.save_model_every == 0:
                     self.save_state(self.args.model_out_name)
-                    print("|")
+                    print("|", end='')
 
-                print("=")
+                print("=", end='')
 
                 self.data.iter += 1
 
@@ -452,10 +544,13 @@ class StyleTransfer:
     def create_train_dataset(self):
         crop_size = 256
 
+
+
         trans = transforms.Compose([
             transforms.Resize(crop_size),
             transforms.RandomCrop(256),
             transforms.ToTensor(),
+            lambda x: x.clamp(0,1),
             transforms.Normalize(mean=self.vgg_mean,
                                  std=self.vgg_std)
                 ])
@@ -465,7 +560,7 @@ class StyleTransfer:
                                      trans, trans)
 
 
-        self.dataloader = torch.utils.data.DataLoader(cdataset, batch_size=4,
+        self.dataloader = torch.utils.data.DataLoader(cdataset, batch_size=self.batch_size,
                                 shuffle=True, num_workers=0)
 
 
