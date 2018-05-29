@@ -17,7 +17,7 @@ import torch.nn.functional as F
 import platform
 import argparse
 
-
+from PIL import Image
 
 
 import time
@@ -226,11 +226,7 @@ class Decoder(nn.Module):
         )
 
         self.conv4uniform =self.get_conv(128, 128)
-
-
         self.conv5uniform = self.get_conv(64, 64)
-
-
 
         self.conv3 =self.get_conv(128, 64)
         self.conv4 =self.get_conv(64, 3,activation=False)
@@ -239,17 +235,13 @@ class Decoder(nn.Module):
         self.upsample = nn.Upsample(scale_factor=2)
 
     def forward(self, x):
-        # pseudo version
-#        x = self.conv1(x)
-#        x = self.upsample(x)
-        
-        # # layer 1 maintain the same number of channels (512)
+        # layer 1 maintain the same number of channels (512)
         # x = self.upsample(x)
         #
         # x = self.conv1uniform(x)
 
         # layer 2 decrease the number of channels from 521 to 256
-        #x = self.upsample(x)
+        # x = self.upsample(x)
 
         x = self.conv2uniform(x)
 
@@ -428,7 +420,7 @@ class StyleTransfer:
         self.to_screen_space = ReverseNormalization(self.vgg_mean, self.vgg_std)
 
     def load_state(self, name):
-        load_obj = torch.load(name)
+        load_obj = torch.load(name, map_location=('gpu' if self.use_gpu else 'cpu'))
 
         self.data = load_obj["Data"]
         self.writer.data = self.data
@@ -563,10 +555,59 @@ class StyleTransfer:
         self.dataloader = torch.utils.data.DataLoader(cdataset, batch_size=self.batch_size,
                                 shuffle=True, num_workers=0)
 
+    
+    def apply(self, style_path, content_path):
+        # load two images
+        style_img = image_loader(style_path)
+        content_img = image_loader(content_path)
+        
+        # run through the network
+        vgg_content = self.encoder(content_img)
+        vgg_style = self.encoder(style_img)
+ 
+        vgg_content_with_stlye = self.adain(vgg_content, vgg_style)
+        vgg_content_with_stlye = vgg_content*.5 + vgg_content_with_stlye*.5
+
+        stylized_content = self.decoder(vgg_content_with_stlye)
+        
+        # convert to tensor, remove 0 dimension, apply self.to_screen_space
+        stylized_content = self.to_screen_space(stylized_content.data)
+        stylized_content = stylized_content.squeeze(0)
+        stylized_content = stylized_content.clamp(0,1)
+        
+        # convert to PIL and save
+        stylized_content = unloader(stylized_content)
+        stylized_content.save('stylelized_content.jpg')
+
+
+    def run_apply(self):
+        self.apply("style.jpg", "content.jpg")
+            
+loader = transforms.ToTensor()      # transform to tensor
+unloader = transforms.ToPILImage()  # transform to PILImage
+
+def image_loader(image_name):
+    # load the image
+    image = Image.open(image_name)
+    # resize so divisible by 8 (cropped)
+    width, height = image.size
+    image = image.resize((width - width%8, height - height%8))
+    
+    # convert to tensor, Normalize and add batch dimension
+    image = loader(image)
+    image = Variable(image, requires_grad=False)
+    
+    f = transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+    image = f(image)
+    image = image.unsqueeze(0)
+    return image
+
 
 class Args:
     model_out_name = None
     model_in_name = None
+
+
 
 
 def main():
@@ -580,6 +621,8 @@ def main():
     parser.add_argument('--modelin', type=str, nargs=1,
                         help='File name for model input file',
                         default=[None])
+    
+    parser.add_argument("--apply", action='store_true')
 
     args = parser.parse_args()
 
@@ -588,11 +631,17 @@ def main():
 
     st = StyleTransfer(gpu=True, args=argp)
 
+
+    argp.model_in_name  = "../style_transfer/model.pth"
     if argp.model_in_name is not None:
         st.load_state(argp.model_in_name)
 
     st.create_train_dataset()
-    st.train()
+    
+    if args.apply or True:
+        st.run_apply()
+    else:
+        st.train()
 
 if __name__ == "__main__":
     main()
