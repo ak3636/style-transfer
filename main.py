@@ -556,20 +556,38 @@ class StyleTransfer:
                                 shuffle=True, num_workers=0)
 
     
-    def apply(self, style_path, content_path):
-        # load two images
-        style_img = image_loader(style_path)
+    def apply(self, content_path, style_paths, weights):
+        # load the images
         content_img = image_loader(content_path)
-        
+        style_imgs = []
+        for path in style_paths:
+            style_imgs.append(image_loader(path))
+
         # run through the network
         vgg_content = self.encoder(content_img)
-        vgg_style = self.encoder(style_img)
- 
-        vgg_content_with_stlye = self.adain(vgg_content, vgg_style)
-        vgg_content_with_stlye = vgg_content*.5 + vgg_content_with_stlye*.5
-
-        stylized_content = self.decoder(vgg_content_with_stlye)
+        vgg_applied_styles = []
+        for style_img in style_imgs:
+            vgg_style = self.encoder(style_img)
+            vgg_applied_styles.append(self.adain(vgg_content, vgg_style))
+            
+        # lerp with the content image 
+        if (len(style_paths) == 1):
+            alpha = weights[0]
+            vgg_style = vgg_applied_styles[0]
+            
+            # lerp between style and content 
+            vgg_content_with_stlye = (1-alpha)*vgg_content + alpha*vgg_style
+            stylized_content = self.decoder(vgg_content_with_stlye)
         
+        # if we are interpolating with multiple styles
+        else:
+            vgg_content_with_style = vgg_applied_styles[0]*weights[0]
+            for index in range(1, len(weights)):
+                vgg_content_with_style += vgg_applied_styles[index] * weights[index]
+            
+            stylized_content = self.decoder(vgg_content_with_style)
+            
+
         # convert to tensor, remove 0 dimension, apply self.to_screen_space
         stylized_content = self.to_screen_space(stylized_content.data)
         stylized_content = stylized_content.squeeze(0)
@@ -581,7 +599,8 @@ class StyleTransfer:
 
 
     def run_apply(self):
-        self.apply("style.jpg", "content.jpg")
+        self.apply("content.jpg", ["style1.jpg", "style2.jpg"], [0.2, 0.8])
+        
             
 loader = transforms.ToTensor()      # transform to tensor
 unloader = transforms.ToPILImage()  # transform to PILImage
@@ -632,7 +651,7 @@ def main():
     st = StyleTransfer(gpu=True, args=argp)
 
 
-    argp.model_in_name  = "../style_transfer/model.pth"
+    argp.model_in_name  = "../model.pth"
     if argp.model_in_name is not None:
         st.load_state(argp.model_in_name)
 
