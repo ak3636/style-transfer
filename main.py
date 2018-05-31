@@ -18,6 +18,7 @@ import platform
 import argparse
 
 from PIL import Image
+import PIL.ImageOps
 
 
 import time
@@ -569,6 +570,8 @@ class StyleTransfer:
         for style_img in style_imgs:
             vgg_style = self.encoder(style_img)
             vgg_applied_styles.append(self.adain(vgg_content, vgg_style))
+            del vgg_style
+            
             
         # lerp with the content image 
         if (len(style_paths) == 1):
@@ -577,7 +580,10 @@ class StyleTransfer:
             
             # lerp between style and content 
             vgg_content_with_stlye = (1-alpha)*vgg_content + alpha*vgg_style
+            del vgg_style
+            del vgg_content
             stylized_content = self.decoder(vgg_content_with_stlye)
+            del vgg_content_with_stlye
         
         # if we are interpolating with multiple styles
         else:
@@ -594,16 +600,57 @@ class StyleTransfer:
         stylized_content = stylized_content.clamp(0,1)
         
         # convert to PIL and save
-        stylized_content = unloader(stylized_content)
+        stylized_content = convert_to_PIL(stylized_content)
         stylized_content.save('stylelized_content.jpg')
+    
+    def apply_mask(self, content_path, style_path1, style_path2, mask_path):
+        # load the images
+        content_img = image_loader(content_path)
+        style_img1 = image_loader(style_path1)
+        style_img2 = image_loader(style_path2)
+        # load the mask 
+        mask, inverted_mask = load_mask(mask_path)
+        
+        # run through the network
+        vgg_content = self.encoder(content_img)
+        vgg_style1 = self.encoder(style_img1)
+        vgg_style2 = self.encoder(style_img2)
+        vgg_applied_style1 = self.adain(vgg_content, vgg_style1)
+        vgg_applied_style2 = self.adain(vgg_content, vgg_style2)
+        
+        # apply mask to style1 and inverted mask to style2
+        vgg_content_with_style = vgg_applied_style1 * mask
+        vgg_content_with_style += vgg_applied_style2 * inverted_mask
+        
+        stylized_content = self.decoder(vgg_content_with_style)
+        
+        # convert to tensor, remove 0 dimension, apply self.to_screen_space
+        stylized_content = self.to_screen_space(stylized_content.data)
+        stylized_content = stylized_content.squeeze(0)
+        stylized_content = stylized_content.clamp(0,1)
+        
+        # convert to PIL and save
+        stylized_content = convert_to_PIL(stylized_content)
+        stylized_content.save('masked_result.jpg')
 
 
     def run_apply(self):
-        self.apply("content.jpg", ["style1.jpg", "style2.jpg"], [0.2, 0.8])
+        with torch.no_grad():
+            self.apply("content5.jpg", ["style5.jpg"], [1])
+
+
+    def run_apply_mask(self):
+        self.apply_mask("content.jpg", "style1.jpg", "style2.jpg", "mask.jpg")
+    
+    def test(self):
+        # run through multiple test cases
+        self.apply("content2.jpg", ["style2.jpg"], [1])
+        pass 
+
         
-            
-loader = transforms.ToTensor()      # transform to tensor
-unloader = transforms.ToPILImage()  # transform to PILImage
+convert_to_tensor = transforms.ToTensor()      # transform to tensor
+convert_to_PIL = transforms.ToPILImage()  # transform to PILImage
+normalize = transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
 
 def image_loader(image_name):
     # load the image
@@ -611,16 +658,34 @@ def image_loader(image_name):
     # resize so divisible by 8 (cropped)
     width, height = image.size
     image = image.resize((width - width%8, height - height%8))
-    
     # convert to tensor, Normalize and add batch dimension
-    image = loader(image)
+    image = convert_to_tensor(image)
     image = Variable(image, requires_grad=False)
-    
-    f = transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
-    image = f(image)
+    image = normalize(image)
     image = image.unsqueeze(0)
     return image
 
+def load_mask(mask):
+    image = Image.open(mask)
+    image = image.convert(mode='L')     # convert to black and white
+     # resize so divisible by 8 (cropped)
+    width, height = image.size 
+    image = image.resize((width - width%8, height - height%8))
+    # downsize by 8
+    w,h = image.size
+    image = image.resize((w//8, h//8))
+    # invert the mask
+    inverted = PIL.ImageOps.invert(image)
+    
+    # convert both masks to tensors, Normalize and add batch dimension
+    image = convert_to_tensor(image)
+    image = Variable(image, requires_grad=False)
+    image = image.unsqueeze(0)
+    
+    inverted = convert_to_tensor(inverted)
+    inverted = Variable(inverted, requires_grad=False)
+    inverted = inverted.unsqueeze(0)
+    return image, inverted
 
 class Args:
     model_out_name = None
@@ -642,7 +707,12 @@ def main():
                         default=[None])
     
     parser.add_argument("--apply", action='store_true')
+    
+    parser.add_argument("--mask", action='store_true')
+    
+    parser.add_argument("--test", action='store_true')
 
+    
     args = parser.parse_args()
 
     argp.model_out_name = args.modelout[0]
@@ -657,10 +727,15 @@ def main():
 
     st.create_train_dataset()
     
-    if args.apply or True:
+    if args.apply:
         st.run_apply()
+    elif args.mask:
+        st.run_apply_mask()
+    elif args.test:
+        st.test()
     else:
         st.train()
 
 if __name__ == "__main__":
+
     main()
