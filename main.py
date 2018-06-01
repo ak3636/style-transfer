@@ -208,9 +208,6 @@ class Decoder(nn.Module):
 
     def __init__(self):
         super(Decoder, self).__init__()
-        # pseudo version
-#        self.conv1 = nn.Conv2d(512,3,3,padding=1)
-#        self.upsample = nn.Upsample(scale_factor=2**5)
 
         self.conv1uniform = nn.Sequential(
             *[self.get_conv(512, 512) for _ in range(3)]
@@ -557,7 +554,7 @@ class StyleTransfer:
                                 shuffle=True, num_workers=0)
 
     
-    def apply(self, content_path, style_paths, weights):
+    def apply(self, content_path, style_paths, weights, out_path):
         # load the images
         content_img = image_loader(content_path)
         style_imgs = []
@@ -601,9 +598,9 @@ class StyleTransfer:
         
         # convert to PIL and save
         stylized_content = convert_to_PIL(stylized_content)
-        stylized_content.save('stylelized_content.jpg')
+        stylized_content.save(out_path)
     
-    def apply_mask(self, content_path, style_path1, style_path2, mask_path):
+    def apply_mask(self, content_path, style_path1, style_path2, mask_path, out_path):
         # load the images
         content_img = image_loader(content_path)
         style_img1 = image_loader(style_path1)
@@ -631,21 +628,41 @@ class StyleTransfer:
         
         # convert to PIL and save
         stylized_content = convert_to_PIL(stylized_content)
-        stylized_content.save('masked_result.jpg')
+        stylized_content.save(out_path)
 
 
     def run_apply(self):
         with torch.no_grad():
-            self.apply("content5.jpg", ["style5.jpg"], [1])
+            self.apply("content/content6.jpg", ["style/style6.jpg"], [1], "result6.jpg")
 
 
     def run_apply_mask(self):
-        self.apply_mask("content.jpg", "style1.jpg", "style2.jpg", "mask.jpg")
+#        self.apply_mask("content/dance2.jpg", "style/style4.jpg", "style/style5.jpg", 
+#                        "mask/mask2.jpg", "mask_result2.jpg")
+        self.apply_mask("content/mask_content.jpg", "style/style9.jpg", "style/style8.jpg", 
+                        "mask/mask3.png", "mask_result3.jpg")
+#        self.apply_mask("content/content.jpg", "style/style1.jpg", "style/style2.jpg", 
+#                        "mask/mask.jpg")
     
     def test(self):
         # run through multiple test cases
-        self.apply("content2.jpg", ["style2.jpg"], [1])
-        pass 
+        # test on one style
+        self.apply("content/content1.jpg", ["style/style1.jpg"], [1], "test_results/result1.jpg")
+        self.apply("content/content2.jpg", ["style/style2.jpg"], [1], "test_results/result2.jpg")
+        self.apply("content/content3.jpg", ["style/style3.jpg"], [1], "test_results/result3.jpg")
+        self.apply("content/content4.jpg", ["style/style4.jpg"], [1], "test_results/result4.jpg")
+        self.apply("content/content5.jpg", ["style/style5.jpg"], [1], "test_results/result5.jpg")
+        self.apply("content/content6.jpg", ["style/style6.jpg"], [1], "test_results/result6.jpg")
+        
+        # test on interpolation between content and style 
+        self.apply("content/content2.jpg", ["style/style2.jpg"], [0], "test_results/interp0.jpg")
+        self.apply("content/content2.jpg", ["style/style2.jpg"], [0.25], "test_results/interp25.jpg")
+        self.apply("content/content2.jpg", ["style/style2.jpg"], [0.5], "test_results/interp50.jpg")
+        self.apply("content/content2.jpg", ["style/style2.jpg"], [0.75], "test_results/interp75.jpg")
+        self.apply("content/content2.jpg", ["style/style2.jpg"], [1], "test_results/interp100.jpg")
+        
+        # test on multiple style interpolation
+        
 
         
 convert_to_tensor = transforms.ToTensor()      # transform to tensor
@@ -677,7 +694,7 @@ def load_mask(mask):
     # invert the mask
     inverted = PIL.ImageOps.invert(image)
     
-    # convert both masks to tensors, Normalize and add batch dimension
+    # convert both masks to tensors and add batch dimension
     image = convert_to_tensor(image)
     image = Variable(image, requires_grad=False)
     image = image.unsqueeze(0)
