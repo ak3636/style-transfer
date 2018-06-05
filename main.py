@@ -647,23 +647,134 @@ class StyleTransfer:
     def test(self):
         # run through multiple test cases
         # test on one style
-        self.apply("content/content1.jpg", ["style/style1.jpg"], [1], "test_results/result1.jpg")
-        self.apply("content/content2.jpg", ["style/style2.jpg"], [1], "test_results/result2.jpg")
-        self.apply("content/content3.jpg", ["style/style3.jpg"], [1], "test_results/result3.jpg")
-        self.apply("content/content4.jpg", ["style/style4.jpg"], [1], "test_results/result4.jpg")
-        self.apply("content/content5.jpg", ["style/style5.jpg"], [1], "test_results/result5.jpg")
-        self.apply("content/content6.jpg", ["style/style6.jpg"], [1], "test_results/result6.jpg")
-        
-        # test on interpolation between content and style 
-        self.apply("content/content2.jpg", ["style/style2.jpg"], [0], "test_results/interp0.jpg")
-        self.apply("content/content2.jpg", ["style/style2.jpg"], [0.25], "test_results/interp25.jpg")
-        self.apply("content/content2.jpg", ["style/style2.jpg"], [0.5], "test_results/interp50.jpg")
-        self.apply("content/content2.jpg", ["style/style2.jpg"], [0.75], "test_results/interp75.jpg")
-        self.apply("content/content2.jpg", ["style/style2.jpg"], [1], "test_results/interp100.jpg")
-        
-        # test on multiple style interpolation
-        
+#        self.apply("content/content1.jpg", ["style/style1.jpg"], [1], "test_results/result1.jpg")
+#        self.apply("content/content2.jpg", ["style/style2.jpg"], [1], "test_results/result2.jpg")
+#        self.apply("content/content3.jpg", ["style/style3.jpg"], [1], "test_results/result3.jpg")
+#        self.apply("content/content4.jpg", ["style/style4.jpg"], [1], "test_results/result4.jpg")
+#        self.apply("content/content5.jpg", ["style/style5.jpg"], [1], "test_results/result5.jpg")
+#        self.apply("content/content6.jpg", ["style/style6.jpg"], [1], "test_results/result6.jpg")
+#        self.apply("content/lenna.jpg", ["style/style1.jpg"], [1], "test_results/result7.jpg")
+#        self.apply("content/brad_pitt.jpg", ["style/style10.jpg"], [1], "test_results/result8.jpg")
+#        self.apply("content/golden_gate.jpg", ["style/style11.jpg"], [1], "test_results/result9.jpg")
 
+#        # test on interpolation between content and style 
+#        self.apply("content/content2.jpg", ["style/style2.jpg"], [0], "test_results/interp0.jpg")
+#        self.apply("content/content2.jpg", ["style/style2.jpg"], [0.25], "test_results/interp25.jpg")
+#        self.apply("content/content2.jpg", ["style/style2.jpg"], [0.5], "test_results/interp50.jpg")
+#        self.apply("content/content2.jpg", ["style/style2.jpg"], [0.75], "test_results/interp75.jpg")
+#        self.apply("content/content2.jpg", ["style/style2.jpg"], [1], "test_results/interp100.jpg")
+#        
+        # test on multiple style interpolation
+        # col 1 - interpolation between the first two styles
+#        self.apply("content/avril.jpg", 
+#                   ["style/style10.jpg", "style/style12.jpg", "style/style13.jpg", "style/style7.jpg"], 
+#                   [1,0,0,0],
+#                   "test_results/multiInter0-0.jpg")
+#        self.apply("content/avril.jpg", 
+#                   ["style/style10.jpg", "style/style12.jpg", "style/style13.jpg", "style/style7.jpg"], 
+#                   [0.75,0,0.25,0], 
+#                   "test_results/multiInter0-1.jpg")
+#        self.apply("content/avril.jpg", 
+#                   ["style/style10.jpg", "style/style12.jpg", "style/style13.jpg", "style/style7.jpg"], 
+#                   [0.5,0,0.5,0],
+#                   "test_results/multiInter0-2.jpg")
+#        self.apply("content/avril.jpg", 
+#                   ["style/style10.jpg", "style/style12.jpg", "style/style13.jpg", "style/style7.jpg"], 
+#                   [0.25,0,0.75,0],
+#                   "test_results/multiInter0-3.jpg")
+#        self.apply("content/avril.jpg", 
+#                   ["style/style10.jpg", "style/style12.jpg", "style/style13.jpg", "style/style7.jpg"], 
+#                   [0,0,1,0], 
+#                   "test_results/multiInter0-4.jpg")
+        # col 2
+#        self.apply("content/avril.jpg", 
+#                   ["style/style10.jpg", "style/style12.jpg", "style/style13.jpg", "style/style7.jpg"], 
+#                   [0.75,0.25,0,0], 
+#                   "test_results/multiInter1-0.jpg")
+#        self.apply("content/avril.jpg", 
+#                   ["style/style10.jpg", "style/style12.jpg", "style/style13.jpg", "style/style7.jpg"], 
+#                   [0.5625,0.1875,0.1875,0.0625],
+#                   "test_results/multiInter1-1.jpg")
+#        self.apply("content/avril.jpg", 
+#                   ["style/style10.jpg", "style/style12.jpg", "style/style13.jpg", "style/style7.jpg"], 
+#                   [0.375,0.125,0.375,0.125],
+#                   "test_results/multiInter1-2.jpg")
+#        self.apply("content/avril.jpg", 
+#                   ["style/style10.jpg", "style/style12.jpg", "style/style13.jpg", "style/style7.jpg"], 
+#                   [0.1875,0.0625,0.5625,0.1875],
+#                   "test_results/multiInter1-3.jpg")
+#        self.apply("content/avril.jpg", 
+#                   ["style/style10.jpg", "style/style12.jpg", "style/style13.jpg", "style/style7.jpg"], 
+#                   [0,0,0.75,0.25],
+#                   "test_results/multiInter1-4.jpg")
+        
+        # col 3 
+#        self.apply("content/avril.jpg", 
+#                   ["style/style10.jpg", "style/style12.jpg", "style/style13.jpg", "style/style7.jpg"], 
+#                   [0.5,0.5,0,0],
+#                   "test_results/multiInter2-0.jpg")
+#        self.apply("content/avril.jpg", 
+#                   ["style/style10.jpg", "style/style12.jpg", "style/style13.jpg", "style/style7.jpg"], 
+#                   [0.375,0.375,0.125,0.125],
+#                   "test_results/multiInter2-1.jpg")
+#        self.apply("content/avril.jpg", 
+#                   ["style/style10.jpg", "style/style12.jpg", "style/style13.jpg", "style/style7.jpg"], 
+#                   [0.25,0.25,0.25,0.25],
+#                   "test_results/multiInter2-2.jpg")
+#        self.apply("content/avril.jpg", 
+#                   ["style/style10.jpg", "style/style12.jpg", "style/style13.jpg", "style/style7.jpg"], 
+#                   [0.125,0.125,0.375,0.375],
+#                   "test_results/multiInter2-3.jpg")
+#        self.apply("content/avril.jpg", 
+#                   ["style/style10.jpg", "style/style12.jpg", "style/style13.jpg", "style/style7.jpg"], 
+#                   [0,0,0.5,0.5],
+#                   "test_results/multiInter2-4.jpg")
+        
+        # col 4        
+        self.apply("content/avril.jpg", 
+                   ["style/style10.jpg", "style/style12.jpg", "style/style13.jpg", "style/style7.jpg"], 
+                   [0.25,0.75,0,0],
+                   "test_results/multiInter3-0.jpg")
+        self.apply("content/avril.jpg", 
+                   ["style/style10.jpg", "style/style12.jpg", "style/style13.jpg", "style/style7.jpg"], 
+                   [0.1875,0.5625,0.0625,0.1875],
+                   "test_results/multiInter3-1.jpg")
+        self.apply("content/avril.jpg", 
+                   ["style/style10.jpg", "style/style12.jpg", "style/style13.jpg", "style/style7.jpg"], 
+                   [0.125,0.375,0.125,0.375],
+                   "test_results/multiInter3-2.jpg")
+        self.apply("content/avril.jpg", 
+                   ["style/style10.jpg", "style/style12.jpg", "style/style13.jpg", "style/style7.jpg"], 
+                   [0.0625,0.1875,0.1875,0.5625],
+                   "test_results/multiInter3-3.jpg")
+        self.apply("content/avril.jpg", 
+                   ["style/style10.jpg", "style/style12.jpg", "style/style13.jpg", "style/style7.jpg"], 
+                   [0,0,0.25,0.75],
+                   "test_results/multiInter3-4.jpg")
+        
+        # col 5 - interpolation between the last two styles
+        self.apply("content/avril.jpg", 
+                   ["style/style10.jpg", "style/style12.jpg", "style/style13.jpg", "style/style7.jpg"], 
+                   [0,1,0,0],
+                   "test_results/multiInter4-0.jpg")
+        self.apply("content/avril.jpg", 
+                   ["style/style10.jpg", "style/style12.jpg", "style/style13.jpg", "style/style7.jpg"], 
+                   [0,0.75,0,0.25],
+                   "test_results/multiInter4-1.jpg")
+        self.apply("content/avril.jpg", 
+                   ["style/style10.jpg", "style/style12.jpg", "style/style13.jpg", "style/style7.jpg"], 
+                   [0,0.5,0,0.5],
+                   "test_results/multiInter4-2.jpg")
+        self.apply("content/avril.jpg", 
+                   ["style/style10.jpg", "style/style12.jpg", "style/style13.jpg", "style/style7.jpg"], 
+                   [0,0.25,0,0.75],
+                   "test_results/multiInter4-3.jpg")
+        self.apply("content/avril.jpg", 
+                   ["style/style10.jpg", "style/style12.jpg", "style/style13.jpg", "style/style7.jpg"], 
+                   [0,0,0,1],
+                   "test_results/multiInter4-4.jpg")
+        
+        
         
 convert_to_tensor = transforms.ToTensor()      # transform to tensor
 convert_to_PIL = transforms.ToPILImage()  # transform to PILImage
