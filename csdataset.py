@@ -58,9 +58,9 @@ class CSDataset(torch.utils.data.Dataset):
                 try:
                     im = Image.open(path)
 
-                    if im.size[0] < self.size[0] or im.size[1] < self.size[1]:
-                        print("Bad size", im.size)
-                        raise Exception("Too small")
+                    # if im.size[0] < self.size[0] or im.size[1] < self.size[1]:
+                    #     print("Bad size", im.size)
+                    #     raise Exception("Too small")
 
 
                     if im.mode != "RGB":

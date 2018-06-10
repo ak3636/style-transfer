@@ -22,6 +22,7 @@ import PIL.ImageOps
 
 
 import time
+import copy
 
 class Writer:
     def __init__(self, data):
@@ -143,49 +144,55 @@ class VGGencoder(models.vgg.VGG):
 
 
 
-class VGGloss(models.vgg.VGG):
+class VGGloss(nn.Module):
     def __init__(self):
-        super(VGGloss, self).__init__(models.vgg.make_layers(models.vgg.cfg['E']))
+        super(VGGloss, self).__init__()
         self.layer_names = []
 
-        for param in self.parameters():
-            param.requires_grad = False
+        self.return_names = ["relu1_1", "relu2_1", "relu3_1", "relu4_1"]
+        #
+        # for param in self.parameters():
+        #     param.requires_grad = False
 
     def reuse(self, encoder):
         self.layer_names = encoder.get_name_layers()
 
-        my_params = {name: param for name, param in self.named_parameters()}
+        self.encoder = encoder
+        #
+        # my_params = {name: param for name, param in self.named_parameters()}
+        #
+        # for name, param in encoder.named_parameters():
+        #     my_params[name].data = param.data
 
-        for name, param in encoder.named_parameters():
-            my_params[name].data = param.data
+    def set_return_name(self, return_names):
+        self.return_names = return_names
 
 
-
+    #
+    # def forward(self, x):
+    #     #
+    #     for layer_name, layer in zip(self.layer_names, self.features.children()):
+    #         # print(layer_name)
+    #         x = layer(x)
+    #         if layer_name == "relu4_1":
+    #             break
+    #
+    #     # x = self.features(x)
+    #
+    #     return x
 
     def forward(self, x):
-        #
-        for layer_name, layer in zip(self.layer_names, self.features.children()):
-            # print(layer_name)
-            x = layer(x)
-            if layer_name == "relu4_1":
-                break
 
-        # x = self.features(x)
-
-        return x
-
-    def run(self, x, return_names):
-
-        nret = len(return_names)
+        nret = len(self.return_names)
         ret = [None] * nret
 
 
-        for layer_name, layer in zip(self.layer_names, self.features.children()):
+        for layer_name, layer in zip(self.layer_names, self.encoder.features.children()):
 
 
             x = layer(x)
 
-            for idx, lname in enumerate(return_names):
+            for idx, lname in enumerate(self.return_names):
                 if lname == layer_name:
                     ret[idx] = x
                     nret -= 1
@@ -193,7 +200,7 @@ class VGGloss(models.vgg.VGG):
             if nret <= 0:
                 break
 
-        return ret
+        return tuple(ret)
 class Decoder(nn.Module):
 
     def get_conv(self, lin, lout, activation=True):
@@ -224,13 +231,13 @@ class Decoder(nn.Module):
         )
 
         self.conv4uniform =self.get_conv(128, 128)
-        self.conv5uniform = self.get_conv(64, 64)
+        self.conv5uniform =  nn.Sequential(self.get_conv(64, 64), self.get_conv(64, 64))
 
         self.conv3 =self.get_conv(128, 64)
         self.conv4 =self.get_conv(64, 3,activation=False)
         #self.conv5 = self.get_conv(16, 3)
 
-        self.upsample = nn.Upsample(scale_factor=2)
+        self.upsample = lambda x: F.upsample(x, scale_factor=2,  mode='nearest')
 
     def forward(self, x):
         # layer 1 maintain the same number of channels (512)
@@ -294,6 +301,10 @@ class StatisticLoss(nn.Module):
     def forward(self, output, target):
         output_avg, output_std = self.normcalc(output)
         target_avg, target_std = self.normcalc(target)
+
+        output_std = output_std.clamp(min=1e-6)
+        target_std = target_std.clamp(min=1e-6)
+
         loss = F.mse_loss(output_avg, target_avg, size_average=False) + \
                F.mse_loss(output_std, target_std, size_average=False)
 
@@ -308,8 +319,8 @@ class StyleLoss(nn.Module):
         self.statistical_loss = StatisticLoss()
 
     def forward(self, output, target):
-        output_features = self.vgg_loss.run(output, self.layers)
-        target_features = self.vgg_loss.run(target, self.layers)
+        output_features = self.vgg_loss(output)
+        target_features = self.vgg_loss(target)
 
         total = 0
 
@@ -318,16 +329,7 @@ class StyleLoss(nn.Module):
 
         return total
 
-class ContentLoss(nn.Module):
-    def __init__(self, vgg_loss):
-        super(ContentLoss, self).__init__()
-        self.vgg_loss = vgg_loss
 
-
-    def forward(self, output, target_vgg):
-        output_vgg = self.vgg_loss.forward(output)
-
-        return F.mse_loss(output_vgg, target_vgg)
 
 
 
@@ -377,7 +379,7 @@ class StyleTransfer:
 
     class RunConfig:
         save_loss_every = 10
-        save_image_every = 10000
+        save_image_every = 100
         save_model_every = 1000
 
     def __init__(self, args, gpu=True):
@@ -398,7 +400,7 @@ class StyleTransfer:
         self.encoder = self.to_gpu(VGGencoder("relu4_1"))
         self.decoder = self.to_gpu(Decoder())
 
-        self.batch_size = 4
+        self.batch_size = 8
 
         self.adain = self.to_gpu(AdaIN())
 
@@ -411,14 +413,14 @@ class StyleTransfer:
         self.vgg_loss.reuse(self.encoder)
 
         self.style_loss = self.to_gpu(StyleLoss(self.vgg_loss))
-        self.content_loss = self.to_gpu(ContentLoss(self.vgg_loss))
+        #self.content_loss = self.to_gpu(ContentLoss(self.vgg_loss))
 
         self.writer = Writer(self.data)
 
         self.to_screen_space = ReverseNormalization(self.vgg_mean, self.vgg_std)
 
     def load_state(self, name):
-        load_obj = torch.load(name, map_location=('gpu' if self.use_gpu else 'cpu'))
+        load_obj = torch.load(name, map_location=(None if self.use_gpu else 'cpu'))
 
         self.data = load_obj["Data"]
         self.writer.data = self.data
@@ -455,6 +457,9 @@ class StyleTransfer:
 
         return x
 
+    def to_cpu(self, x):
+        return x.cpu()
+
     def to_variable(self, x, requires_grad=True):
         x = self.to_gpu(x)
         x = Variable(x, requires_grad=requires_grad)
@@ -474,6 +479,11 @@ class StyleTransfer:
                 # print(image_content.type())
                 # print(image_style.type())
 
+                #self.vgg_loss = self.to_gpu(VGGloss())
+                self.vgg_loss.reuse(copy.deepcopy(self.encoder))
+
+                self.style_loss = self.to_gpu(StyleLoss(self.vgg_loss))
+
 
                 image_content = self.to_variable(image_content)
                 image_style = self.to_variable(image_style)
@@ -487,8 +497,13 @@ class StyleTransfer:
                 stylized_content = self.decoder(vgg_content_with_stlye)
 
                 style_loss = self.style_loss(stylized_content, image_style) * .01 / self.batch_size
-                content_loss = self.content_loss(stylized_content, vgg_content_with_stlye)
-                total_loss = style_loss + content_loss
+                content_loss = F.mse_loss(copy.deepcopy(self.encoder)(stylized_content), vgg_content_with_stlye)
+
+                style_decoded = self.decoder(vgg_style)
+
+                style_2_style = F.mse_loss(style_decoded, image_style)*10
+
+                total_loss = style_loss + content_loss + style_2_style
 
 #                total_loss = F.mse_loss(stylized_content,image_content )
 
@@ -496,6 +511,7 @@ class StyleTransfer:
                     self.writer.add_scalar('style_loss', style_loss)
                     self.writer.add_scalar('content_loss', content_loss)
                     self.writer.add_scalar('total_loss', total_loss)
+                    self.writer.add_scalar('id_loss', style_2_style)
 
                 if (self.data.iter + 1) % self.runconfig.save_image_every == 0:
                     self.writer.add_image('image', torchvision.utils.make_grid(torch.cat(
@@ -503,13 +519,15 @@ class StyleTransfer:
                             self.to_screen_space(image_content.data),
                             self.to_screen_space(image_style.data),
                             self.to_screen_space(stylized_content.data).clamp(0,1),
+                            self.to_screen_space(style_decoded.data).clamp(0,1),
                         ], 0
                     ), nrow=self.batch_size, padding=0))
 
 
                 self.optimizer.zero_grad()
                 self.encoder.zero_grad()
-                self.content_loss.zero_grad()
+                self.decoder.zero_grad()
+                #self.content_loss.zero_grad()
                 self.style_loss.zero_grad()
                 self.vgg_loss.zero_grad()
 
@@ -532,7 +550,7 @@ class StyleTransfer:
 
 
     def create_train_dataset(self):
-        crop_size = 256
+        crop_size = 512
 
 
 
@@ -556,10 +574,10 @@ class StyleTransfer:
     
     def apply(self, content_path, style_paths, weights, out_path):
         # load the images
-        content_img = image_loader(content_path)
+        content_img = self.image_loader(content_path)
         style_imgs = []
         for path in style_paths:
-            style_imgs.append(image_loader(path))
+            style_imgs.append(self.image_loader(path))
 
         # run through the network
         vgg_content = self.encoder(content_img)
@@ -592,19 +610,21 @@ class StyleTransfer:
             
 
         # convert to tensor, remove 0 dimension, apply self.to_screen_space
+        stylized_content =  content_img#
+
         stylized_content = self.to_screen_space(stylized_content.data)
         stylized_content = stylized_content.squeeze(0)
         stylized_content = stylized_content.clamp(0,1)
         
         # convert to PIL and save
-        stylized_content = convert_to_PIL(stylized_content)
+        stylized_content = convert_to_PIL(stylized_content.cpu())
         stylized_content.save(out_path)
     
     def apply_mask(self, content_path, style_path1, style_path2, mask_path, out_path):
         # load the images
-        content_img = image_loader(content_path)
-        style_img1 = image_loader(style_path1)
-        style_img2 = image_loader(style_path2)
+        content_img = self.image_loader(content_path)
+        style_img1 = self.image_loader(style_path1)
+        style_img2 = self.image_loader(style_path2)
         # load the mask 
         mask, inverted_mask = load_mask(mask_path)
         
@@ -633,7 +653,7 @@ class StyleTransfer:
 
     def run_apply(self):
         with torch.no_grad():
-            self.apply("content/content6.jpg", ["style/style6.jpg"], [1], "result6.jpg")
+            self.apply("content/content6.jpg", ["style/style6.jpg"], [1], "result6-0.jpg")
 
 
     def run_apply_mask(self):
@@ -773,25 +793,27 @@ class StyleTransfer:
                    ["style/style10.jpg", "style/style12.jpg", "style/style13.jpg", "style/style7.jpg"], 
                    [0,0,0,1],
                    "test_results/multiInter4-4.jpg")
-        
-        
+    def image_loader(self, image_name):
+        # load the image
+        image = Image.open(image_name)
+        # resize so divisible by 8 (cropped)
+        width, height = image.size
+        image = image.resize((width - width%8, height - height%8))
+        # convert to tensor, Normalize and add batch dimension
+        image = convert_to_tensor(image)
+        image = Variable(image, requires_grad=False)
+        image = normalize(image)
+        image = image.unsqueeze(0)
+
+        image = self.to_gpu(image)
+        return image
         
 convert_to_tensor = transforms.ToTensor()      # transform to tensor
-convert_to_PIL = transforms.ToPILImage()  # transform to PILImage
+convert_to_PIL = transforms.Compose([#lambda x: x.cpu(),
+                                     transforms.ToPILImage()])  # transform to PILImage
 normalize = transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
 
-def image_loader(image_name):
-    # load the image
-    image = Image.open(image_name)
-    # resize so divisible by 8 (cropped)
-    width, height = image.size
-    image = image.resize((width - width%8, height - height%8))
-    # convert to tensor, Normalize and add batch dimension
-    image = convert_to_tensor(image)
-    image = Variable(image, requires_grad=False)
-    image = normalize(image)
-    image = image.unsqueeze(0)
-    return image
+
 
 def load_mask(mask):
     image = Image.open(mask)
@@ -849,7 +871,7 @@ def main():
     st = StyleTransfer(gpu=True, args=argp)
 
 
-    argp.model_in_name  = "../model.pth"
+    argp.model_in_name  = None
     if argp.model_in_name is not None:
         st.load_state(argp.model_in_name)
 
