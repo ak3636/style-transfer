@@ -142,6 +142,12 @@ class VGGencoder(models.vgg.VGG):
 
         return x
 
+class TVloss(nn.Module):
+    def __init__(self):
+        super(TVloss, self).__init__()
+
+    def forward(self, x):
+        return F.mse_loss(x[:,:,1,:],x[:,:,-1,:]) + F.mse_loss(x[:,:,:,1],x[:,:,:, -1])
 
 
 class VGGloss(nn.Module):
@@ -238,6 +244,10 @@ class Decoder(nn.Module):
         #self.conv5 = self.get_conv(16, 3)
 
         self.upsample = lambda x: F.upsample(x, scale_factor=2,  mode='nearest')
+
+        self.upsample1 = nn.PixelShuffle(2)
+        self.upsample2 = nn.PixelShuffle(2)
+        self.upsample3 = nn.PixelShuffle(2)
 
     def forward(self, x):
         # layer 1 maintain the same number of channels (512)
@@ -365,6 +375,40 @@ class ReverseNormalization:
 
         return torch.stack(ret, 1)
 
+
+class Discriminator(nn.Module):
+
+    def get_conv(self, inn ,outn):
+        return nn.Sequential(nn.Conv2d(inn, outn, 5, padding=2), nn.LeakyReLU())
+
+    def __init__(self):
+        super(Discriminator, self).__init__()
+
+        self.discr = nn.Sequential(
+            self.get_conv(3, 32),
+            nn.AvgPool2d(2),
+            self.get_conv(32, 64),
+            nn.AvgPool2d(2),
+            self.get_conv(64, 64),
+            nn.AvgPool2d(2),
+            self.get_conv(64, 64),
+            nn.AvgPool2d(2),
+            self.get_conv(64, 64),
+            nn.AvgPool2d(2),
+            nn.Conv2d(64, 1, 3, padding=1)
+        )
+
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+        x = self.discr(x)
+
+        x = self.sigmoid(x)
+
+        return x
+
+
+
 class Data:
     epoch = 0
     iter = 0
@@ -395,7 +439,7 @@ class StyleTransfer:
 
         self.data = Data()
 
-        self.max_epoch = 1000000
+        self.max_epoch = 160000
 
         self.encoder = self.to_gpu(VGGencoder("relu4_1"))
         self.decoder = self.to_gpu(Decoder())
@@ -414,6 +458,14 @@ class StyleTransfer:
 
         self.style_loss = self.to_gpu(StyleLoss(self.vgg_loss))
         #self.content_loss = self.to_gpu(ContentLoss(self.vgg_loss))
+        self.tv_loss = self.to_gpu(TVloss())
+
+        self.discriminator = self.to_gpu(Discriminator())
+
+        self.d_optimizer = torch.optim.Adam(self.discriminator.parameters(), lr=0.0002)
+
+        self.discriminator_loss = nn.BCELoss()
+
 
         self.writer = Writer(self.data)
 
@@ -441,9 +493,11 @@ class StyleTransfer:
         save_obj = {"Data": self.data,
                     "Networks": {
                         "Encoder": self.encoder.state_dict(),
-                        "Decoder": self.decoder.state_dict()
+                        "Decoder": self.decoder.state_dict(),
+                        "Discriminator": self.discriminator.state_dict()
                         },
-                    "Optimizer": [self.optimizer_type, self.optimizer.state_dict()]
+                    "Optimizer": [self.optimizer_type, self.optimizer.state_dict()],
+                    "DOptimizer": [self.optimizer_type, self.d_optimizer.state_dict()]
                     }
 
         torch.save(save_obj, name)
@@ -466,8 +520,119 @@ class StyleTransfer:
 
         return x
 
-    def train(self):
+    def constant(self, value):
 
+        x = Variable(torch.ones(self.batch_size,1,8,8)*value)
+        return self.to_gpu(x)
+
+    def apply_style(self, image_content, image_style):
+        vgg_content = self.encoder(image_content)
+        vgg_style = self.encoder(image_style)
+
+        vgg_content_with_stlye = self.adain(vgg_content, vgg_style)
+        # vgg_content_with_stlye = vgg_content
+
+        stylized_content = self.decoder(vgg_content_with_stlye)
+
+        return stylized_content
+
+
+    def zero_out(self):
+        self.optimizer.zero_grad()
+        self.discriminator.zero_grad()
+        self.d_optimizer.zero_grad()
+
+        self.encoder.zero_grad()
+        self.decoder.zero_grad()
+        # self.content_loss.zero_grad()
+        self.style_loss.zero_grad()
+        self.vgg_loss.zero_grad()
+
+    def train_generator(self, image_content, image_style):
+        # print(image_content.type())
+        # print(image_style.type())
+
+        # self.vgg_loss = self.to_gpu(VGGloss())
+        self.vgg_loss.reuse(copy.deepcopy(self.encoder))
+
+        self.style_loss = self.to_gpu(StyleLoss(self.vgg_loss))
+
+        # image_content = self.to_variable(image_content)
+        # image_style = self.to_variable(image_style)
+
+        vgg_content = self.encoder(image_content)
+        vgg_style = self.encoder(image_style)
+
+        vgg_content_with_stlye = self.adain(vgg_content, vgg_style)
+        # vgg_content_with_stlye = vgg_content
+
+        stylized_content = self.decoder(vgg_content_with_stlye)
+
+        tv_loss = self.tv_loss(stylized_content) * 2
+
+        style_loss = self.style_loss(stylized_content, image_style) * .01 / self.batch_size
+        content_loss = F.mse_loss(copy.deepcopy(self.encoder)(stylized_content), vgg_content_with_stlye)
+
+        style_decoded = self.decoder(vgg_style)
+
+        style_2_style = F.mse_loss(style_decoded, image_style) * 10
+
+        discr_loss = 0
+
+        if self.training_moder > 1:
+            discr_loss = self.discriminator_loss(self.discriminator(stylized_content), self.constant(1))*10
+
+        total_loss = style_loss + content_loss + style_2_style + tv_loss + discr_loss
+
+        #                total_loss = F.mse_loss(stylized_content,image_content )
+
+        if (self.data.iter + 1) % self.runconfig.save_loss_every == 0:
+            self.writer.add_scalar('style_loss', style_loss)
+            self.writer.add_scalar('content_loss', content_loss)
+            self.writer.add_scalar('total_loss', total_loss)
+            self.writer.add_scalar('discr_loss', discr_loss)
+
+            self.writer.add_scalar('id_loss', style_2_style)
+            self.writer.add_scalar('tv_loss', tv_loss)
+
+        if (self.data.iter + 1) % self.runconfig.save_image_every == 0:
+            self.writer.add_image('image', torchvision.utils.make_grid(torch.cat(
+                [
+                    self.to_screen_space(image_content.data),
+                    self.to_screen_space(image_style.data),
+                    self.to_screen_space(stylized_content.data).clamp(0, 1),
+                    self.to_screen_space(style_decoded.data).clamp(0, 1),
+                ], 0
+            ), nrow=self.batch_size, padding=0))
+
+        self.zero_out()
+
+        total_loss.backward()
+        self.optimizer.step()
+
+
+    def train_discr(self, image_content, image_style):
+        d_real_loss =  self.discriminator_loss(self.discriminator(image_style), self.constant(1))
+
+
+
+        d_fake_loss = self.discriminator_loss(self.discriminator(self.apply_style(image_content, image_style)), self.constant(0))
+
+        d_total_loss = d_real_loss + d_fake_loss
+
+        if (self.data.iter + 1) % self.runconfig.save_loss_every == 0:
+            self.writer.add_scalar('d_total_loss', d_total_loss)
+            self.writer.add_scalar('d_real_loss', d_real_loss)
+            self.writer.add_scalar('d_fake_loss', d_fake_loss)
+
+        self.zero_out()
+
+        d_total_loss.backward()
+        self.optimizer.step()
+
+    def train(self):
+        self.training_moder = 2
+        training_mode = 0
 
         while self.data.epoch < self.max_epoch:
 
@@ -476,71 +641,27 @@ class StyleTransfer:
             epoch_start_time = time.time()
 
             for idx, (image_content, image_style) in enumerate(self.dataloader):
-                # print(image_content.type())
-                # print(image_style.type())
-
-                #self.vgg_loss = self.to_gpu(VGGloss())
-                self.vgg_loss.reuse(copy.deepcopy(self.encoder))
-
-                self.style_loss = self.to_gpu(StyleLoss(self.vgg_loss))
-
-
                 image_content = self.to_variable(image_content)
                 image_style = self.to_variable(image_style)
 
-                vgg_content = self.encoder(image_content)
-                vgg_style = self.encoder(image_style)
-
-                vgg_content_with_stlye = self.adain(vgg_content, vgg_style)
-                # vgg_content_with_stlye = vgg_content
-
-                stylized_content = self.decoder(vgg_content_with_stlye)
-
-                style_loss = self.style_loss(stylized_content, image_style) * .01 / self.batch_size
-                content_loss = F.mse_loss(copy.deepcopy(self.encoder)(stylized_content), vgg_content_with_stlye)
-
-                style_decoded = self.decoder(vgg_style)
-
-                style_2_style = F.mse_loss(style_decoded, image_style)*10
-
-                total_loss = style_loss + content_loss + style_2_style
-
-#                total_loss = F.mse_loss(stylized_content,image_content )
-
-                if (self.data.iter + 1) % self.runconfig.save_loss_every == 0:
-                    self.writer.add_scalar('style_loss', style_loss)
-                    self.writer.add_scalar('content_loss', content_loss)
-                    self.writer.add_scalar('total_loss', total_loss)
-                    self.writer.add_scalar('id_loss', style_2_style)
-
-                if (self.data.iter + 1) % self.runconfig.save_image_every == 0:
-                    self.writer.add_image('image', torchvision.utils.make_grid(torch.cat(
-                        [
-                            self.to_screen_space(image_content.data),
-                            self.to_screen_space(image_style.data),
-                            self.to_screen_space(stylized_content.data).clamp(0,1),
-                            self.to_screen_space(style_decoded.data).clamp(0,1),
-                        ], 0
-                    ), nrow=self.batch_size, padding=0))
+                if training_mode == 0:
+                    self.train_generator(image_content, image_style)
+                else:
+                    self.train_discr(image_content, image_style)
 
 
-                self.optimizer.zero_grad()
-                self.encoder.zero_grad()
-                self.decoder.zero_grad()
-                #self.content_loss.zero_grad()
-                self.style_loss.zero_grad()
-                self.vgg_loss.zero_grad()
+                if training_mode == 0:
+                    if (self.data.iter + 1) % self.runconfig.save_model_every == 0:
+                        self.save_state(self.args.model_out_name)
+                        print("|", end='')
 
-                total_loss.backward()
-                self.optimizer.step()
+                    print("=", end='')
 
-                if (self.data.iter + 1) % self.runconfig.save_model_every == 0:
-                    self.save_state(self.args.model_out_name)
-                    print("|", end='')
+                    self.data.iter += 1
 
-                print("=", end='')
+                training_mode  = (training_mode + 1) % self.training_moder
 
-                self.data.iter += 1
+
 
             print("]")
 
@@ -610,7 +731,7 @@ class StyleTransfer:
             
 
         # convert to tensor, remove 0 dimension, apply self.to_screen_space
-        stylized_content =  content_img#
+
 
         stylized_content = self.to_screen_space(stylized_content.data)
         stylized_content = stylized_content.squeeze(0)
@@ -657,98 +778,100 @@ class StyleTransfer:
 
 
     def run_apply_mask(self):
-#        self.apply_mask("content/dance2.jpg", "style/style4.jpg", "style/style5.jpg", 
-#                        "mask/mask2.jpg", "mask_result2.jpg")
-        self.apply_mask("content/mask_content.jpg", "style/style9.jpg", "style/style8.jpg", 
+        self.apply_mask("content/dance2.jpg", "style/style4.jpg", "style/style5.jpg",
+                       "mask/mask2.jpg", "mask_result2.jpg")
+        self.apply_mask("content/mask_content.jpg", "style/style9.jpg", "style/style8.jpg",
                         "mask/mask3.png", "mask_result3.jpg")
-#        self.apply_mask("content/content.jpg", "style/style1.jpg", "style/style2.jpg", 
-#                        "mask/mask.jpg")
+        # self.apply_mask("content/content.jpg", "style/style1.jpg", "style/style2.jpg",
+        #                "mask/mask.jpg")
     
     def test(self):
         # run through multiple test cases
         # test on one style
-#        self.apply("content/content1.jpg", ["style/style1.jpg"], [1], "test_results/result1.jpg")
-#        self.apply("content/content2.jpg", ["style/style2.jpg"], [1], "test_results/result2.jpg")
-#        self.apply("content/content3.jpg", ["style/style3.jpg"], [1], "test_results/result3.jpg")
-#        self.apply("content/content4.jpg", ["style/style4.jpg"], [1], "test_results/result4.jpg")
-#        self.apply("content/content5.jpg", ["style/style5.jpg"], [1], "test_results/result5.jpg")
-#        self.apply("content/content6.jpg", ["style/style6.jpg"], [1], "test_results/result6.jpg")
-#        self.apply("content/lenna.jpg", ["style/style1.jpg"], [1], "test_results/result7.jpg")
-#        self.apply("content/brad_pitt.jpg", ["style/style10.jpg"], [1], "test_results/result8.jpg")
-#        self.apply("content/golden_gate.jpg", ["style/style11.jpg"], [1], "test_results/result9.jpg")
+        if True:
+            self.apply("content/content1.jpg", ["style/style1.jpg"], [1], "test_results/result1.jpg")
+            self.apply("content/content2.jpg", ["style/style2.jpg"], [1], "test_results/result2.jpg")
+            self.apply("content/content3.jpg", ["style/style3.jpg"], [1], "test_results/result3.jpg")
+            self.apply("content/content4.jpg", ["style/style4.jpg"], [1], "test_results/result4.jpg")
+            self.apply("content/content5.jpg", ["style/style5.jpg"], [1], "test_results/result5.jpg")
+            self.apply("content/content6.jpg", ["style/style6.jpg"], [1], "test_results/result6.jpg")
+            self.apply("content/lenna.jpg", ["style/style1.jpg"], [1], "test_results/result7.jpg")
+            self.apply("content/brad_pitt.jpg", ["style/style10.jpg"], [1], "test_results/result8.jpg")
+            self.apply("content/golden_gate.jpg", ["style/style11.jpg"], [1], "test_results/result9.jpg")
 
-#        # test on interpolation between content and style 
-#        self.apply("content/content2.jpg", ["style/style2.jpg"], [0], "test_results/interp0.jpg")
-#        self.apply("content/content2.jpg", ["style/style2.jpg"], [0.25], "test_results/interp25.jpg")
-#        self.apply("content/content2.jpg", ["style/style2.jpg"], [0.5], "test_results/interp50.jpg")
-#        self.apply("content/content2.jpg", ["style/style2.jpg"], [0.75], "test_results/interp75.jpg")
-#        self.apply("content/content2.jpg", ["style/style2.jpg"], [1], "test_results/interp100.jpg")
-#        
+            # test on interpolation between content and style
+            self.apply("content/content2.jpg", ["style/style2.jpg"], [0], "test_results/interp0.jpg")
+            self.apply("content/content2.jpg", ["style/style2.jpg"], [0.25], "test_results/interp25.jpg")
+            self.apply("content/content2.jpg", ["style/style2.jpg"], [0.5], "test_results/interp50.jpg")
+            self.apply("content/content2.jpg", ["style/style2.jpg"], [0.75], "test_results/interp75.jpg")
+            self.apply("content/content2.jpg", ["style/style2.jpg"], [1], "test_results/interp100.jpg")
+    #
         # test on multiple style interpolation
         # col 1 - interpolation between the first two styles
-#        self.apply("content/avril.jpg", 
-#                   ["style/style10.jpg", "style/style12.jpg", "style/style13.jpg", "style/style7.jpg"], 
-#                   [1,0,0,0],
-#                   "test_results/multiInter0-0.jpg")
-#        self.apply("content/avril.jpg", 
-#                   ["style/style10.jpg", "style/style12.jpg", "style/style13.jpg", "style/style7.jpg"], 
-#                   [0.75,0,0.25,0], 
-#                   "test_results/multiInter0-1.jpg")
-#        self.apply("content/avril.jpg", 
-#                   ["style/style10.jpg", "style/style12.jpg", "style/style13.jpg", "style/style7.jpg"], 
-#                   [0.5,0,0.5,0],
-#                   "test_results/multiInter0-2.jpg")
-#        self.apply("content/avril.jpg", 
-#                   ["style/style10.jpg", "style/style12.jpg", "style/style13.jpg", "style/style7.jpg"], 
-#                   [0.25,0,0.75,0],
-#                   "test_results/multiInter0-3.jpg")
-#        self.apply("content/avril.jpg", 
-#                   ["style/style10.jpg", "style/style12.jpg", "style/style13.jpg", "style/style7.jpg"], 
-#                   [0,0,1,0], 
-#                   "test_results/multiInter0-4.jpg")
-        # col 2
-#        self.apply("content/avril.jpg", 
-#                   ["style/style10.jpg", "style/style12.jpg", "style/style13.jpg", "style/style7.jpg"], 
-#                   [0.75,0.25,0,0], 
-#                   "test_results/multiInter1-0.jpg")
-#        self.apply("content/avril.jpg", 
-#                   ["style/style10.jpg", "style/style12.jpg", "style/style13.jpg", "style/style7.jpg"], 
-#                   [0.5625,0.1875,0.1875,0.0625],
-#                   "test_results/multiInter1-1.jpg")
-#        self.apply("content/avril.jpg", 
-#                   ["style/style10.jpg", "style/style12.jpg", "style/style13.jpg", "style/style7.jpg"], 
-#                   [0.375,0.125,0.375,0.125],
-#                   "test_results/multiInter1-2.jpg")
-#        self.apply("content/avril.jpg", 
-#                   ["style/style10.jpg", "style/style12.jpg", "style/style13.jpg", "style/style7.jpg"], 
-#                   [0.1875,0.0625,0.5625,0.1875],
-#                   "test_results/multiInter1-3.jpg")
-#        self.apply("content/avril.jpg", 
-#                   ["style/style10.jpg", "style/style12.jpg", "style/style13.jpg", "style/style7.jpg"], 
-#                   [0,0,0.75,0.25],
-#                   "test_results/multiInter1-4.jpg")
-        
-        # col 3 
-#        self.apply("content/avril.jpg", 
-#                   ["style/style10.jpg", "style/style12.jpg", "style/style13.jpg", "style/style7.jpg"], 
-#                   [0.5,0.5,0,0],
-#                   "test_results/multiInter2-0.jpg")
-#        self.apply("content/avril.jpg", 
-#                   ["style/style10.jpg", "style/style12.jpg", "style/style13.jpg", "style/style7.jpg"], 
-#                   [0.375,0.375,0.125,0.125],
-#                   "test_results/multiInter2-1.jpg")
-#        self.apply("content/avril.jpg", 
-#                   ["style/style10.jpg", "style/style12.jpg", "style/style13.jpg", "style/style7.jpg"], 
-#                   [0.25,0.25,0.25,0.25],
-#                   "test_results/multiInter2-2.jpg")
-#        self.apply("content/avril.jpg", 
-#                   ["style/style10.jpg", "style/style12.jpg", "style/style13.jpg", "style/style7.jpg"], 
-#                   [0.125,0.125,0.375,0.375],
-#                   "test_results/multiInter2-3.jpg")
-#        self.apply("content/avril.jpg", 
-#                   ["style/style10.jpg", "style/style12.jpg", "style/style13.jpg", "style/style7.jpg"], 
-#                   [0,0,0.5,0.5],
-#                   "test_results/multiInter2-4.jpg")
+        if True:
+            self.apply("content/avril.jpg",
+                      ["style/style10.jpg", "style/style12.jpg", "style/style13.jpg", "style/style7.jpg"],
+                      [1,0,0,0],
+                      "test_results/multiInter0-0.jpg")
+            self.apply("content/avril.jpg",
+                      ["style/style10.jpg", "style/style12.jpg", "style/style13.jpg", "style/style7.jpg"],
+                      [0.75,0,0.25,0],
+                      "test_results/multiInter0-1.jpg")
+            self.apply("content/avril.jpg",
+                      ["style/style10.jpg", "style/style12.jpg", "style/style13.jpg", "style/style7.jpg"],
+                      [0.5,0,0.5,0],
+                      "test_results/multiInter0-2.jpg")
+            self.apply("content/avril.jpg",
+                      ["style/style10.jpg", "style/style12.jpg", "style/style13.jpg", "style/style7.jpg"],
+                      [0.25,0,0.75,0],
+                      "test_results/multiInter0-3.jpg")
+            self.apply("content/avril.jpg",
+                      ["style/style10.jpg", "style/style12.jpg", "style/style13.jpg", "style/style7.jpg"],
+                      [0,0,1,0],
+                      "test_results/multiInter0-4.jpg")
+            #col 2
+            self.apply("content/avril.jpg",
+                      ["style/style10.jpg", "style/style12.jpg", "style/style13.jpg", "style/style7.jpg"],
+                      [0.75,0.25,0,0],
+                      "test_results/multiInter1-0.jpg")
+            self.apply("content/avril.jpg",
+                      ["style/style10.jpg", "style/style12.jpg", "style/style13.jpg", "style/style7.jpg"],
+                      [0.5625,0.1875,0.1875,0.0625],
+                      "test_results/multiInter1-1.jpg")
+            self.apply("content/avril.jpg",
+                      ["style/style10.jpg", "style/style12.jpg", "style/style13.jpg", "style/style7.jpg"],
+                      [0.375,0.125,0.375,0.125],
+                      "test_results/multiInter1-2.jpg")
+            self.apply("content/avril.jpg",
+                      ["style/style10.jpg", "style/style12.jpg", "style/style13.jpg", "style/style7.jpg"],
+                      [0.1875,0.0625,0.5625,0.1875],
+                      "test_results/multiInter1-3.jpg")
+            self.apply("content/avril.jpg",
+                      ["style/style10.jpg", "style/style12.jpg", "style/style13.jpg", "style/style7.jpg"],
+                      [0,0,0.75,0.25],
+                      "test_results/multiInter1-4.jpg")
+
+            #col 3
+            self.apply("content/avril.jpg",
+                      ["style/style10.jpg", "style/style12.jpg", "style/style13.jpg", "style/style7.jpg"],
+                      [0.5,0.5,0,0],
+                      "test_results/multiInter2-0.jpg")
+            self.apply("content/avril.jpg",
+                      ["style/style10.jpg", "style/style12.jpg", "style/style13.jpg", "style/style7.jpg"],
+                      [0.375,0.375,0.125,0.125],
+                      "test_results/multiInter2-1.jpg")
+            self.apply("content/avril.jpg",
+                      ["style/style10.jpg", "style/style12.jpg", "style/style13.jpg", "style/style7.jpg"],
+                      [0.25,0.25,0.25,0.25],
+                      "test_results/multiInter2-2.jpg")
+            self.apply("content/avril.jpg",
+                      ["style/style10.jpg", "style/style12.jpg", "style/style13.jpg", "style/style7.jpg"],
+                      [0.125,0.125,0.375,0.375],
+                      "test_results/multiInter2-3.jpg")
+            self.apply("content/avril.jpg",
+                      ["style/style10.jpg", "style/style12.jpg", "style/style13.jpg", "style/style7.jpg"],
+                      [0,0,0.5,0.5],
+                      "test_results/multiInter2-4.jpg")
         
         # col 4        
         self.apply("content/avril.jpg", 
@@ -871,7 +994,7 @@ def main():
     st = StyleTransfer(gpu=True, args=argp)
 
 
-    argp.model_in_name  = None
+    #argp.model_in_name  = args.modelin
     if argp.model_in_name is not None:
         st.load_state(argp.model_in_name)
 
