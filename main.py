@@ -19,6 +19,7 @@ import argparse
 
 from PIL import Image
 import PIL.ImageOps
+import cv2
 
 
 import time
@@ -916,6 +917,21 @@ class StyleTransfer:
                    ["style/style10.jpg", "style/style12.jpg", "style/style13.jpg", "style/style7.jpg"], 
                    [0,0,0,1],
                    "test_results/multiInter4-4.jpg")
+    
+    def video(self):
+        num_frames = get_frames('CMTrim.mp4')
+        
+        style = ["style/style5.jpg"]
+        weight = [1]
+        for frame_num in range(num_frames):
+            self.apply("frames/frame%d.jpg" % frame_num,
+                       style, weight, 
+                       "stylized_frames/frame%d_result.jpg" % frame_num)
+        
+        create_video(num_frames, "stylized_video.avi")
+            
+
+    
     def image_loader(self, image_name):
         # load the image
         image = Image.open(image_name)
@@ -960,6 +976,34 @@ def load_mask(mask):
     inverted = inverted.unsqueeze(0)
     return image, inverted
 
+def get_frames(video_path):
+    video = cv2.VideoCapture(video_path)
+    success, image = video.read()
+    count = 0
+    success = True
+    while success:
+        success, image = video.read()
+        cv2.imwrite("frames/frame%d.jpg" % count, image)
+        if cv2.waitKey(10) == 27:
+            break
+        count += 1
+    return count 
+
+def create_video(num_frames, final_video_path):
+    # read in the images
+    frames = []
+    for frame_num in range(num_frames):
+        image_name = "stylized_frames/frame%d_result.jpg" % frame_num
+        frames.append(cv2.imread(image_name))
+
+    height, width, layers = frames[0].shape
+    vid = cv2.VideoWriter(final_video_path, cv2.VideoWriter_fourcc(*"MJPG"), 15, (width, height))
+
+    # write those images to the video
+    for frame in frames:
+        vid.write(frame)
+    vid.release()
+
 class Args:
     model_out_name = None
     model_in_name = None
@@ -985,6 +1029,7 @@ def main():
     
     parser.add_argument("--test", action='store_true')
 
+    parser.add_argument("--video", action='store_true')
     
     args = parser.parse_args()
 
@@ -995,6 +1040,7 @@ def main():
 
 
     #argp.model_in_name  = args.modelin
+    argp.model_in_name = '../model.pth'
     if argp.model_in_name is not None:
         st.load_state(argp.model_in_name)
 
@@ -1006,6 +1052,8 @@ def main():
         st.run_apply_mask()
     elif args.test:
         st.test()
+    elif args.video:
+        st.video()
     else:
         st.train()
 
