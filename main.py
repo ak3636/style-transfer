@@ -920,14 +920,17 @@ class StyleTransfer:
     
     def video(self):
         num_frames = get_frames('CMTrim.mp4')
-        
+#        num_frames = 69
         style = ["style/style5.jpg"]
         weight = [1]
         for frame_num in range(num_frames):
             self.apply("frames/frame%d.jpg" % frame_num,
                        style, weight, 
                        "stylized_frames/frame%d_result.jpg" % frame_num)
-        
+#            self.apply("C:/Users/kroth/Documents/UCSD/Grad/252C/Testing/frame%d.jpg" % frame_num,
+#                       style, weight, 
+#                       "C:/Users/kroth/Documents/UCSD/Grad/252C/Testing/stylized_frames/frame%d_result.jpg" % frame_num)
+
         create_video(num_frames, "stylized_video.avi")
             
 
@@ -994,6 +997,8 @@ def create_video(num_frames, final_video_path):
     frames = []
     for frame_num in range(num_frames):
         image_name = "stylized_frames/frame%d_result.jpg" % frame_num
+#        image_name = "C:/Users/kroth/Documents/UCSD/Grad/252C/Testing/stylized_frames/frame%d_result.jpg" % frame_num
+
         frames.append(cv2.imread(image_name))
 
     height, width, layers = frames[0].shape
